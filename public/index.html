@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#020617">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-512.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+  <title>Cave d'Affinage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Syne:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css?v=2.2">
+</head>
+
+<body>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">🥩</div>
+      <h1>Cave d'Affinage</h1>
+      <div class="sub">Maturation & Séchage</div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" onclick="showView('list')">
+        <span class="nav-dot"></span> Mes pièces
+      </button>
+      <button class="nav-item" onclick="showView('archive')">
+        <span class="nav-dot"></span> Archives
+      </button>
+      <button class="nav-item" onclick="showView('add')">
+        <span class="nav-dot"></span> Nouvelle pièce
+      </button>
+      <button class="nav-item" onclick="showView('scan')">
+        <span class="nav-dot"></span> Scanner QR
+      </button>
+      <button class="nav-item" onclick="showView('history')">
+        <span class="nav-dot"></span> Historique
+      </button>
+      <button class="nav-item" onclick="showView('settings')">
+        <span class="nav-dot"></span> Paramètres
+      </button>
+    </nav>
+    <div class="sidebar-status" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+      <span style="flex:1;min-width:0;"><span class="status-dot"></span>Serveur actif</span>
+      <label class="theme-toggle" title="Thème clair / sombre">
+        <span class="theme-toggle-icon">☀</span>
+        <span class="theme-switch">
+          <input type="checkbox" id="theme-checkbox" onchange="toggleTheme(this.checked)">
+          <span class="theme-track"></span>
+        </span>
+        <span class="theme-toggle-icon">🌙</span>
+      </label>
+      <button onclick="openHelp()" title="Guide de séchage"
+        style="width:22px;height:22px;border-radius:50%;border:1px solid var(--border2);background:transparent;color:var(--copper2);font-size:0.7rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;transition:all 0.18s;flex-shrink:0;"
+        onmouseover="this.style.background='var(--ink4)';this.style.borderColor='var(--border3)'"
+        onmouseout="this.style.background='transparent';this.style.borderColor='var(--border2)'">?</button>
+    </div>
+  </aside>
+
+  <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="mobile-toggle" onclick="openSidebar()">☰</button>
+      <div class="topbar-crumb" id="topbar-crumb"><span>Mes pièces</span></div>
+    </div>
+
+    <div class="content">
+
+      <!-- LIST -->
+      <div id="list-view" class="view active">
+        <div class="page-head">
+          <div class="page-head-left">
+            <div class="eyebrow" id="list-title-sub">Cave d'Affinage</div>
+            <h2 id="list-title-main">Pièces en maturation</h2>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            <div id="sensor-display" class="sensor-display" style="display:none;" onclick="showView('history')">
+              <span class="sensor-label">Frigo :</span>
+              <span class="sensor-item" id="sensor-temp">--°C</span>
+              <span class="sensor-item" id="sensor-hum">--%</span>
+              <button class="sensor-help-btn" onclick="event.stopPropagation(); openSensorHelp()"
+                title="Configuration Home Assistant">?</button>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="print-all-btn" onclick="printAllLabels()"
+              style="display:none;padding:0.35rem 0.6rem;">🖨 Tout imprimer</button>
+            <span class="badge badge-outline" id="meat-count">0 pièces</span>
+            <span class="badge badge-outline" id="meat-total-weight"
+              style="color:var(--ivory2); border-color:var(--border);">0 kg</span>
+          </div>
+        </div>
+        <div id="meat-list"></div>
+        <div id="qr-gen-hidden" style="display:none;"></div>
+      </div>
+
+      <!-- ADD -->
+      <div id="add-view" class="view">
+        <div class="page-head">
+          <div class="page-head-left">
+            <div class="eyebrow">Nouvelle pièce</div>
+            <h2>Enregistrement</h2>
+          </div>
+        </div>
+        <div class="form-shell">
+          <form id="add-meat-form" onsubmit="addMeat(event)">
+            <div class="form-divider" style="margin-top:0;border-top:none;">Identification</div>
+            <div class="fg">
+              <label>Nom de la pièce</label>
+              <input type="text" id="meat-name" placeholder="Ex : Coppa de Corse n°1" required>
+            </div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Type</label>
+                <select id="meat-type" onchange="applyTypeDefaults()">
+                  <option value="coppa">Coppa</option>
+                  <option value="lonzo">Lonzo</option>
+                  <option value="pancetta">Pancetta</option>
+                  <option value="guanciale">Guanciale</option>
+                  <option value="bresaola">Bresaola</option>
+                  <option value="jambon">Jambon</option>
+                  <option value="saucisson">Saucisson</option>
+                  <option value="magret">Magret de canard</option>
+                  <option value="filet_mignon">Filet mignon (porc)</option>
+                  <option value="boeuf_seche">Bœuf séché</option>
+                  <option value="jerky">Beef Jerky</option>
+                  <option value="lomo">Lomo embuchado</option>
+                  <option value="pastrami">Pastrami</option>
+                  <option value="autre">Autre</option>
+                </select>
+              </div>
+              <div class="fg">
+                <label>Poids initial (g)</label>
+                <input type="number" id="meat-weight" placeholder="1000" required min="1">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Date de début</label>
+                <input type="date" id="meat-date" required>
+              </div>
+              <div class="fg">
+                <label>Prix (€)</label>
+                <input type="number" id="meat-price" placeholder="Ex : 15.50" step="0.01" min="0">
+              </div>
+            </div>
+            <div class="form-divider">Objectifs de séchage</div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Durée cible (jours)</label>
+                <input type="number" id="meat-target-days" min="1" max="730" required>
+              </div>
+              <div class="fg">
+                <label>Perte cible (%)</label>
+                <input type="number" id="meat-target-loss" min="1" max="60" step="0.5" required>
+              </div>
+            </div>
+            <div class="fg-hint" style="margin-bottom:1.5rem;">Valeurs pré-remplies selon le type, ajustables.</div>
+            <div class="form-divider">Assaisonnement SSV 421</div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Sel (g)</label>
+                <input type="number" id="meat-salt" min="0" step="0.1" placeholder="auto">
+                <div class="fg-hint" id="salt-pct-hint"></div>
+              </div>
+              <div class="fg">
+                <label>Sucre (g)</label>
+                <input type="number" id="meat-sugar" min="0" step="0.1" placeholder="auto">
+                <div class="fg-hint" id="sugar-pct-hint"></div>
+              </div>
+            </div>
+            <div class="fg">
+              <label>Épices &amp; aromates</label>
+              <div style="display:flex; gap:0.5rem; margin-bottom:0.5rem;">
+                <input type="text" id="spice-input" placeholder="Ex: Poivre noir, Ail..." list="spices-list"
+                  onkeypress="if(event.key==='Enter'){event.preventDefault();addSpiceItem();}">
+                <button type="button" class="btn btn-ghost" onclick="addSpiceItem()">Add</button>
+              </div>
+              <datalist id="spices-list">
+                <!-- Poivres & Piments -->
+                <option value="Poivre noir">
+                <option value="Poivre blanc">
+                <option value="Poivre vert">
+                <option value="Piment d'Espelette">
+                <option value="Paprika doux">
+                <option value="Paprika fumé">
+                <option value="Piment fort (Cayenne)">
+                <option value="Piment doux">
+                  <!-- Herbes -->
+                <option value="Thym">
+                <option value="Romarin">
+                <option value="Origan">
+                <option value="Sauge">
+                <option value="Sarriette">
+                <option value="Herbes de Provence">
+                <option value="Laurier (feuilles)">
+                  <!-- Graines & Aromates -->
+                <option value="Baies de genièvre">
+                <option value="Fenouil (graines)">
+                <option value="Coriandre (graines)">
+                <option value="Cumin">
+                <option value="Carvi">
+                <option value="Anis vert">
+                <option value="Moutarde (graines)">
+                <option value="Clou de girofle">
+                <option value="Noix de muscade">
+                <option value="Macis">
+                <option value="Quatre-épices">
+                <option value="Cardamome">
+                  <!-- Allium -->
+                <option value="Ail en poudre">
+                <option value="Ail semoule">
+                <option value="Oignon en poudre">
+                  <!-- Additifs traditionnels -->
+                <option value="Sucre roux">
+                <option value="Dextrose">
+                <option value="Salpêtre">
+                <option value="Acide ascorbique">
+                  <!-- Alcools (aromatisation) -->
+                <option value="Vin rouge">
+                <option value="Vin blanc">
+                <option value="Armagnac">
+                <option value="Cognac">
+                  <!-- Mélanges -->
+                <option value="Mélange du Chef">
+                <option value="Mélange Lomo">
+                <option value="Mélange Tex Mex">
+                <option value="Mélange BBQ">
+                <option value="Mélange Indien">
+                <option value="Mélange Egyptien">
+                <option value="Mélange Moyen Orient">
+                <option value="Mélange Népal">
+              </datalist>
+              <div id="spices-container" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>
+              <input type="hidden" id="meat-spices" value="">
+              <div class="fg-hint" id="spices-pct-hint"></div>
+            </div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Prix d'achat (€)</label>
+                <input type="number" id="meat-price" min="0" step="0.01" placeholder="Ex : 15.50">
+              </div>
+              <div class="fg" style="margin-top:1.5rem;">
+                <label class="toggle-fg">
+                  <input type="checkbox" id="meat-smoked">
+                  <span class="toggle-switch"></span>
+                  <span class="toggle-label">Pièce fumée / à fumer 💨</span>
+                </label>
+              </div>
+            </div>
+            <div class="fg">
+              <label>Notes</label>
+              <input type="text" id="meat-notes" placeholder="Observations, source de la viande, technique…">
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Ajouter la pièce →</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- SCAN -->
+      <div id="scan-view" class="view">
+        <div class="page-head">
+          <div class="page-head-left">
+            <div class="eyebrow">Accès rapide</div>
+            <h2>Scanner un QR code</h2>
+          </div>
+        </div>
+        <div class="scan-body">
+          <div style="display:flex;gap:.5rem;margin-bottom:.75rem;">
+            <input type="text" id="scan-input" placeholder="Saisir l'ID"
+              style="flex:1;padding:.55rem .75rem;background:var(--ink3);border:1px solid var(--border);border-radius:var(--r3);color:var(--ivory);font-family:'Fira Code',monospace;font-size:.85rem;outline:none;">
+            <button onclick="scanManual()" class="btn btn-primary">Rechercher</button>
+          </div>
+          <div
+            style="text-align:center;font-size:.65rem;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin:.625rem 0;">
+            — ou —</div>
+          <button id="start-camera-btn" onclick="startCamera()" class="btn btn-ghost btn-full">📷 Activer la
+            caméra</button>
+          <div id="camera-container" style="display:none;">
+            <video id="camera-video" autoplay playsinline></video>
+            <div class="cam-frame"></div>
+            <canvas id="camera-canvas"></canvas>
+          </div>
+          <button id="stop-camera-btn" onclick="stopCamera()" class="btn btn-ghost btn-full"
+            style="display:none;margin-top:.5rem;">⏹ Arrêter</button>
+          <div id="scan-result" style="margin-top:.875rem;"></div>
+        </div>
+      </div>
+
+      <!-- DETAIL -->
+      <div id="detail-view" class="view"></div>
+
+      <!-- SETTINGS -->
+      <div id="settings-view" class="view">
+        <div class="page-head">
+          <div class="page-head-left">
+            <div class="eyebrow">Configuration</div>
+            <h2>Paramètres</h2>
+          </div>
+        </div>
+        <div class="sg">
+          <div class="sc">
+            <h3>💾 Sauvegarde</h3>
+            <p class="sc-desc">Exportez vos données en JSON pour les archiver ou les transférer.</p>
+            <button onclick="exportData()" class="btn btn-primary btn-full">Télécharger la sauvegarde</button>
+            <div style="margin-top:.625rem;font-size:.7rem;color:var(--muted);" id="last-backup-info"></div>
+          </div>
+          <div class="sc">
+            <h3>📤 Restauration</h3>
+            <p class="sc-desc">Importez un fichier de sauvegarde pour restaurer vos données.</p>
+            <input type="file" id="import-file" accept=".json" style="display:none;" onchange="importData(event)">
+            <button onclick="document.getElementById('import-file').click()" class="btn btn-ghost btn-full">Importer une
+              sauvegarde</button>
+            <div
+              style="margin-top:.625rem;padding:.5rem .75rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:var(--r3);font-size:.7rem;color:var(--danger);">
+              ⚠ Remplacera toutes les données actuelles.
+            </div>
+          </div>
+          <div class="sc">
+            <h3>📊 Statistiques</h3>
+            <p class="sc-desc">État actuel de votre cave.</p>
+            <div class="stat2">
+              <div class="sbox">
+                <div class="sbox-n" id="stats-total" style="color:var(--copper2);">—</div>
+                <div class="sbox-l">Pièces</div>
+              </div>
+              <div class="sbox">
+                <div class="sbox-n" id="stats-ready" style="color:var(--sage2);">—</div>
+                <div class="sbox-l">Prêtes</div>
+              </div>
+              <div class="sbox">
+                <div class="sbox-n" id="stats-weight" style="color:var(--ivory2);">—</div>
+                <div class="sbox-l">Poids Total</div>
+              </div>
+            </div>
+            <div style="margin-top:.625rem;text-align:center;font-size:.7rem;color:var(--muted);">
+              Base : <span id="storage-size" style="color:var(--ivory);font-family:'Fira Code',monospace;"></span>
+            </div>
+          </div>
+          <div class="sc">
+            <h3>⚙️ Général</h3>
+            <p class="sc-desc">Personnalisez votre cave et vos étiquettes.</p>
+            <div class="fg">
+              <label>Nom du producteur (étiquettes)</label>
+              <input type="text" id="setting-producer-name" placeholder="Ex: La Cave de Jean">
+            </div>
+            <button onclick="saveAppSettings()" class="btn btn-primary btn-full"
+              style="margin-top:0.5rem;">Enregistrer</button>
+          </div>
+          <div class="sc">
+            <h3>🌡 Seuils d'alerte</h3>
+            <p class="sc-desc">Couleur des pastilles selon les plages de sécurité.</p>
+            <div class="form-row">
+              <div class="fg">
+                <label>Temp. Min (°C)</label>
+                <input type="number" id="setting-temp-min" step="0.1" value="3.0">
+              </div>
+              <div class="fg">
+                <label>Temp. Max (°C)</label>
+                <input type="number" id="setting-temp-max" step="0.1" value="15.0">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="fg">
+                <label>Hum. Min (%)</label>
+                <input type="number" id="setting-hum-min" step="0.5" value="60.0">
+              </div>
+              <div class="fg">
+                <label>Hum. Max (%)</label>
+                <input type="number" id="setting-hum-max" step="0.5" value="85.0">
+              </div>
+            </div>
+            <div class="fg" style="margin-top:0.5rem;">
+              <label class="toggle-fg">
+                <input type="checkbox" id="setting-alerts-enabled">
+                <span class="toggle-switch"></span>
+                <span class="toggle-label">Activer les alertes Telegram</span>
+              </label>
+            </div>
+            <button onclick="saveSensorSettings()" class="btn btn-primary btn-full"
+              style="margin-top:0.5rem;">Enregistrer les seuils</button>
+          </div>
+          <div class="sc">
+            <h3>☁ GitHub Sync</h3>
+            <p class="sc-desc">Sauvegardez vos données sur un dépôt GitHub (format JSON).</p>
+            <div class="fg">
+              <label>Token (PAT)</label>
+              <input type="password" id="gh-token" placeholder="ghp_xxxxxxxxxxxx">
+            </div>
+            <div class="fg">
+              <label>Dépôt (owner/repo)</label>
+              <input type="text" id="gh-repo" placeholder="mon-user/mon-depot">
+            </div>
+            <div class="fg">
+              <label>Chemin (ex: backup.json)</label>
+              <input type="text" id="gh-path" value="backup.json">
+            </div>
+            <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+              <button onclick="saveGitHubSettings()" class="btn btn-ghost btn-sm" style="flex:1;">Configurer</button>
+              <button onclick="backupToGitHub()" class="btn btn-primary btn-sm" style="flex:1;">🚀 Sauvegarder</button>
+            </div>
+          </div>
+          <div class="sc">
+            <h3>🔔 Notifications Telegram</h3>
+            <p class="sc-desc">Recevez une alerte quand une pièce doit être pesée.</p>
+            <div class="fg">
+              <label>Bot Token</label>
+              <input type="password" id="tg-token" placeholder="123456:ABC-DEF...">
+            </div>
+            <div class="fg">
+              <label>Chat ID</label>
+              <input type="text" id="tg-chatid" placeholder="123456789">
+            </div>
+            <div class="fg">
+              <label>Rapport d'état périodique</label>
+              <select id="tg-report-freq">
+                <option value="off">🚫 Désactivé</option>
+                <option value="daily">📅 Quotidien</option>
+                <option value="weekly">🗓️ Hebdomadaire</option>
+                <option value="monthly">🌔 Mensuel</option>
+              </select>
+            </div>
+            <div class="fg">
+              <label>Intervalle de rappel (jours)</label>
+              <input type="number" id="tg-interval" value="7" min="0">
+            </div>
+            <label class="toggle-fg" style="margin-top: 1rem; margin-bottom: 0.5rem;">
+              <input type="checkbox" id="tg-enabled">
+              <div class="toggle-switch"></div>
+              <span class="toggle-label">Activer les notifications</span>
+            </label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.5rem; flex-wrap: wrap;">
+              <button onclick="saveTelegramSettings()" class="btn btn-ghost btn-sm"
+                style="flex:1; min-width: 100px;">Enregistrer</button>
+              <button onclick="testTelegram()" class="btn btn-ghost btn-sm" style="flex:1; min-width: 100px;">💬
+                Tester</button>
+              <button onclick="triggerTelegramReport()" class="btn btn-ghost btn-sm"
+                style="flex:1; min-width: 150px;">📊 Rapport</button>
+              <button onclick="triggerTelegramCheck()" class="btn btn-primary btn-sm"
+                style="flex:1; min-width: 150px;">🔍 Vérifier maintenant</button>
+            </div>
+          </div>
+          <div class="sc">
+            <h3>🌐 Réseau</h3>
+            <p class="sc-desc">Configurez le port d'écoute du serveur. Un redémarrage est nécessaire pour appliquer les
+              changements.</p>
+            <div class="form-row">
+              <div class="fg">
+                <label>Port d'écoute</label>
+                <input type="number" id="setting-port" min="1" max="65535" placeholder="3000">
+              </div>
+              <div class="fg" style="margin-top:1.5rem;">
+                <label class="toggle-fg">
+                  <input type="checkbox" id="setting-https">
+                  <span class="toggle-switch"></span>
+                  <span class="toggle-label">Activer HTTPS 🔒</span>
+                </label>
+              </div>
+            </div>
+            <button onclick="saveNetworkSettings()" class="btn btn-primary btn-full"
+              style="margin-top:0.5rem;">Enregistrer</button>
+            <div
+              style="margin-top:.625rem;padding:.5rem .75rem;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:var(--r3);font-size:.7rem;color:#f59e0b;">
+              ⚠ Un redémarrage du serveur est requis pour appliquer le changement de port.
+            </div>
+          </div>
+          <div class="sc danger-card">
+            <h3 style="color:#e06050;">🗑 Zone dangereuse</h3>
+            <p class="sc-desc">Supprimer définitivement toutes les pièces et leur historique.</p>
+            <button onclick="clearAllData()" class="btn btn-danger btn-full">Supprimer toutes les données</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- HISTORY -->
+      <div id="history-view" class="view">
+        <div class="page-head">
+          <div class="page-head-left">
+            <div class="eyebrow">Environnement</div>
+            <h2>Historique Capteurs</h2>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.75rem;">
+            <select id="history-days" onchange="refreshEnvChart()" class="btn btn-ghost btn-sm"
+              style="padding:0.25rem 0.5rem; height:auto;">
+              <option value="1">24 Heures</option>
+              <option value="7" selected>7 Jours</option>
+              <option value="30">30 Jours</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-shell" style="padding:1.5rem; min-height:400px;">
+          <canvas id="env-chart"></canvas>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="/js/app.js?v=2.2"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(registration => console.log('ServiceWorker classé ✓'))
+          .catch(error => console.log('ServiceWorker échec ×', error));
+      });
+    }
+  </script>
+
+  <!-- HELP MODAL -->
+  <div class="help-overlay" id="help-overlay" onclick="if(event.target===this)closeHelp()">
+    <div class="help-modal">
+      <div class="help-header">
+        <div>
+          <div
+            style="display:inline-flex;align-items:center;gap:.5rem;padding:.2rem .65rem;background:var(--glow);border:1px solid var(--border2);border-radius:99px;font-family:'Fira Code',monospace;font-size:.72rem;color:var(--copper3);margin-bottom:.75rem;">
+            SSV · Salage Sous Vide · Méthode 421
+          </div>
+          <h2>Guide de séchage</h2>
+          <div class="help-source">Source : <a href="https://ouestdelices.com/2023/03/06/viande-salee-sechee-sous-vide/"
+              target="_blank">ouestdelices.com</a> — Viande salée séchée sous-vide</div>
+        </div>
+        <button class="help-close" onclick="closeHelp()">✕</button>
+      </div>
+      <div class="help-body">
+
+        <div class="hs">
+          <div class="hs-title">⚖ Dosage SSV 421 — par kg de viande</div>
+          <div class="hgrid">
+            <div class="hitem">
+              <div class="hitem-k">Sel fin</div>
+              <div class="hitem-v">4 %</div>
+              <div class="hitem-n">Non iodé, non fluoré — sel de Guérande</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Sucre de canne</div>
+              <div class="hitem-v">2 %</div>
+              <div class="hitem-n">Non raffiné de préférence</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Épices &amp; aromates</div>
+              <div class="hitem-v">1 %</div>
+              <div class="hitem-n">Poivre, genièvre, laurier, 4 épices…</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Sel — fourchette</div>
+              <div class="hitem-v">3 – 6 %</div>
+              <div class="hitem-n">4,5 % = bon compromis conservation/goût</div>
+            </div>
+          </div>
+          <div class="htip"><strong>Astuce :</strong> Pour éviter un sur-salage impossible avec la méthode par
+            enfouissement, la méthode SSV dose précisément — la viande ne peut pas être trop salée même si elle reste
+            plus longtemps.</div>
+        </div>
+
+        <div class="hs">
+          <div class="hs-title">🧲 Matériel nécessaire</div>
+          <div class="hgrid">
+            <div class="hitem">
+              <div class="hitem-k">Mise sous-vide</div>
+              <div class="hitem-v">Machine + sacs gaufrés</div>
+              <div class="hitem-n">~40 – 80 €</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Préparation</div>
+              <div class="hitem-v">Balance de cuisine</div>
+              <div class="hitem-n">Précision au gramme</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Épices</div>
+              <div class="hitem-v">Mixer / mortier</div>
+              <div class="hitem-n">Pour réduire en poudre</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Séchage</div>
+              <div class="hitem-v">Grille + frigo ventilé</div>
+              <div class="hitem-n">3 – 5 °C, humidité maîtrisée</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hs">
+          <div class="hs-title">📋 Étapes de préparation</div>
+          <div class="hsteps">
+            <div class="hstep">
+              <div class="hstep-n">1</div>
+              <div class="hstep-t"><strong>Parer la viande</strong> — dégraisser avec un couteau bien aiguisé. Laisser
+                un peu de gras = plus de goût.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">2</div>
+              <div class="hstep-t"><strong>Peser</strong> la pièce pour calculer exactement sel, sucre et épices.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">3</div>
+              <div class="hstep-t"><strong>Mixer les épices</strong> pour les réduire en poudre fine.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">4</div>
+              <div class="hstep-t"><strong>Saupoudrer</strong> le mélange sel+sucre+épices sur toutes les faces, masser
+                pour faire adhérer. Enrouler dans du film alimentaire.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">5</div>
+              <div class="hstep-t"><strong>Mettre sous-vide</strong> et placer au réfrigérateur à 3 – 5 °C.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">6</div>
+              <div class="hstep-t"><strong>Durée de salage</strong> : <em>rayon en cm + 1 jour</em>. Ex : filet de 10 cm
+                de diamètre → 5 cm de rayon → 5 + 1 = <strong>6 jours</strong>. Retourner le sac chaque jour.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">7</div>
+              <div class="hstep-t"><strong>Sortir du sac</strong>, rincer rapidement, sécher au papier absorbant. Peser
+                à nouveau — ce poids sera la référence pour le séchage.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">8</div>
+              <div class="hstep-t">Optionnel : ajouter une <strong>couche d'épices</strong> en surface. Poser sur grille
+                au frigo 24 h pour sécher la surface (améliore l'absorption de la fumée si fumage).</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hs">
+          <div class="hs-title">🌬 Séchage</div>
+          <div class="hsteps">
+            <div class="hstep">
+              <div class="hstep-n">→</div>
+              <div class="hstep-t">Poser la viande sur grille dans le bac à légumes du réfrigérateur ou dans un séchoir
+                dédié (12 – 15 °C, 65 – 75 % d'humidité). Retourner chaque jour.</div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">→</div>
+              <div class="hstep-t">Durée minimale : <strong>2 semaines</strong> (selon l'épaisseur). Pour des pièces
+                épaisses ou plus dures, prévoir une semaine supplémentaire.</div>
+            </div>
+          </div>
+          <div class="hgrid" style="margin-top:.625rem;">
+            <div class="hitem">
+              <div class="hitem-k">Pièces standard</div>
+              <div class="hitem-v">30 – 40 %</div>
+              <div class="hitem-n">Perte de poids à atteindre</div>
+            </div>
+            <div class="hitem">
+              <div class="hitem-k">Beef jerky</div>
+              <div class="hitem-v">50 – 55 %</div>
+              <div class="hitem-n">Tranches fines de 3 – 4 mm, déshydrateur 55 °C / 5 h</div>
+            </div>
+          </div>
+          <div class="hwarn"><strong>⚠ Important :</strong> Ne pas rouler la viande dans un torchon — risque accru de
+            moisissures. Aucun professionnel n'utilise cette méthode.</div>
+        </div>
+
+        <div class="hs">
+          <div class="hs-title">🫙 Conservation</div>
+          <div class="hsteps">
+            <div class="hstep">
+              <div class="hstep-n">→</div>
+              <div class="hstep-t">Une fois sec, remettre sous-vide et conserver dans le bac à légumes du réfrigérateur.
+              </div>
+            </div>
+            <div class="hstep">
+              <div class="hstep-n">→</div>
+              <div class="hstep-t">Durée de conservation : <strong>plusieurs semaines à 2 ans</strong> selon le séchage
+                et les conditions.</div>
+            </div>
+          </div>
+          <div class="htip"><strong>Viandes conseillées :</strong> filet mignon de porc (⭐ favori), rôti de
+            porc/bœuf/veau, magret de canard, blanc de dinde, blanc de poulet. La technique fonctionne aussi pour le
+            poisson.</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- SENSOR HELP MODAL -->
+  <div class="help-overlay" id="sensor-help-modal" onclick="if(event.target===this)closeSensorHelp()">
+    <div class="help-modal" style="max-width:550px;">
+      <div class="help-header">
+        <div>
+          <div class="eyebrow" style="margin-bottom:0.5rem;">Intégration</div>
+          <h2>Home Assistant</h2>
+        </div>
+        <button class="help-close" onclick="closeSensorHelp()">✕</button>
+      </div>
+      <div class="help-body" style="padding:1.5rem; gap:1.5rem;">
+        <p style="font-size:0.85rem;color:var(--ivory2);line-height:1.55;">
+          Pour envoyer les données de vos capteurs HA ici, configurez une commande REST et une automatisation dans Home
+          Assistant.
+        </p>
+
+        <div class="hs">
+          <div class="hs-title">1. Exemple REST Command</div>
+          <pre
+            style="background:var(--ink4);padding:1rem;border-radius:8px;font-size:0.7rem;color:var(--glow2);overflow-x:auto;border:1px solid var(--border);margin-top:0.5rem;"><code>rest_command:
+  update_meat_sensors:
+    url: "http://IP_SERVEUR:3000/api/sensors"
+    method: post
+    verify_ssl: false
+    content_type: "application/json"
+    payload: '{"temperature": {{ states("sensor.votre_temp") }}, "humidity": {{ states("sensor.votre_hum") }}}'</code></pre>
+        </div>
+
+        <div class="hs">
+          <div class="hs-title">2. Automatisation simple</div>
+          <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.75rem;">Ajoutez ceci pour une mise à jour à
+            chaque changement :</p>
+          <pre
+            style="background:var(--ink4);padding:1rem;border-radius:8px;font-size:0.7rem;color:var(--ivory2);overflow-x:auto;border:1px solid var(--border);"><code>automation:
+  - alias: "Update Meat Sensors"
+    trigger:
+      - platform: state
+        entity_id: sensor.votre_temp
+      - platform: state
+        entity_id: sensor.votre_hum
+    action:
+      - service: rest_command.update_meat_sensors</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+</body>
+
+</html>

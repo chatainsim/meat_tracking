@@ -1,0 +1,23 @@
+[Unit]
+Description=Cave d'Affinage - Suivi de maturation et séchage
+After=network.target
+
+[Service]
+Type=simple
+User=cave
+WorkingDirectory=/opt/cave-affinage
+ExecStart=/opt/cave-affinage/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+# Le port et l'activation HTTPS sont maintenant gérés dans config.json
+
+# Sécurité
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/cave-affinage/data
+ReadWritePaths=/opt/cave-affinage/certs
+ReadWritePaths=/opt/cave-affinage/config.json
+
+[Install]
+WantedBy=multi-user.target
