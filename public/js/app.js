@@ -6,40 +6,46 @@ var currentMeat = null;
 var cameraStream = null;
 var scanningInterval = null;
 var currentListView = 'list';
+var quickWeighMeatId = null;
+var weighInterval = 7;       // days between weigh reminders, synced from Telegram settings
+var _dashSensorData = null;  // cached sensor data for dashboard
+var listSort = 'status';     // 'status'|'date'|'progress'|'eta'|'type'
+var listFilterType = '';
+var listFilterStatus = '';
+var tourList = [];
+var tourIdx = 0;
 
-var TYPE_DEFAULTS = {
-  coppa: { days: 90, loss: 30 },
-  lonzo: { days: 60, loss: 30 },
-  pancetta: { days: 75, loss: 30 },
-  guanciale: { days: 90, loss: 30 },
-  bresaola: { days: 45, loss: 35 },
-  jambon: { days: 180, loss: 25 },
-  saucisson: { days: 30, loss: 25 },
-  magret: { days: 21, loss: 35 },
-  filet_mignon: { days: 21, loss: 35 },
-  boeuf_seche: { days: 45, loss: 40 },
-  jerky: { days: 1, loss: 50 },
-  lomo: { days: 60, loss: 35 },
-  pastrami: { days: 14, loss: 20 },
-  autre: { days: 60, loss: 30 },
-};
+// Populated from /api/types — single source of truth
+var TYPES = {};      // { id: { id, label, icon, days, loss } }
+var TYPE_ORDER = []; // ordered list of ids
 
-var TYPE_ICONS = {
-  coppa: '🥩',
-  lonzo: '🥩',
-  pancetta: '🥓',
-  guanciale: '🥓',
-  bresaola: '🥩',
-  jambon: '🍖',
-  saucisson: '🌭',
-  magret: '🦆',
-  filet_mignon: '🐖',
-  boeuf_seche: '🦬',
-  jerky: '🥓',
-  lomo: '🥩',
-  pastrami: '🥩',
-  autre: '🥩',
-};
+function typeIcon(t)  { return (TYPES[t] && TYPES[t].icon)  || '🥩'; }
+function typeLabel(t) { return (TYPES[t] && TYPES[t].label) || t; }
+
+function buildTypeOptions(selected) {
+  return TYPE_ORDER.map(function (id) {
+    var t = TYPES[id];
+    var text = t ? (t.icon + ' ' + t.label) : id;
+    return '<option value="' + id + '"' + (id === selected ? ' selected' : '') + '>' + text + '</option>';
+  }).join('');
+}
+
+async function loadTypes() {
+  try {
+    var list = await apiFetch('/api/types');
+    TYPES = {};
+    TYPE_ORDER = [];
+    list.forEach(function (t) { TYPES[t.id] = t; TYPE_ORDER.push(t.id); });
+    var sel = document.getElementById('meat-type');
+    if (sel) sel.innerHTML = buildTypeOptions(sel.value || TYPE_ORDER[0]);
+    var tf = document.getElementById('list-filter-type');
+    if (tf) tf.innerHTML = '<option value="">Tous les types</option>' +
+      TYPE_ORDER.map(function (id) { return '<option value="' + id + '">' + (TYPES[id] ? TYPES[id].label : id) + '</option>'; }).join('');
+    applyTypeDefaults();
+  } catch (e) {
+    console.error('loadTypes:', e);
+  }
+}
 
 // ══════════════════════════════════════════════════════
 // API
@@ -59,6 +65,8 @@ async function loadMeats() {
   try {
     meats = await apiFetch('/api/meats');
     renderList();
+    var dbView = document.getElementById('dashboard-view');
+    if (dbView && dbView.classList.contains('active')) renderDashboard();
   } catch (e) {
     showToast('Erreur serveur', 'error');
   }
@@ -110,15 +118,16 @@ function initTheme() {
 
 document.addEventListener('DOMContentLoaded', function () {
   initTheme();
-  loadMeats();
+  loadTypes().then(loadMeats);
   loadAppSettings();
   loadNetworkSettings();
+  loadTelegramSettings();
   document.getElementById('meat-date').valueAsDate = new Date();
-  applyTypeDefaults();
   refreshSensors();
   loadSensorSettings();
   setInterval(refreshSensors, 60000);
   document.getElementById('scan-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') scanManual(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeQuickWeigh(); closeTour(); } });
   // Live SSV hints on weight/seasoning input
   var wInput = document.getElementById('meat-weight');
   if (wInput) wInput.addEventListener('input', updateSeasoningHints);
@@ -250,8 +259,9 @@ function closeSensorHelp() {
 // DEFAULTS
 // ══════════════════════════════════════════════════════
 function applyTypeDefaults() {
-  var t = document.getElementById('meat-type').value;
-  var d = TYPE_DEFAULTS[t] || TYPE_DEFAULTS.autre;
+  var sel = document.getElementById('meat-type');
+  if (!sel) return;
+  var d = TYPES[sel.value] || { days: 60, loss: 30 };
   document.getElementById('meat-target-days').value = d.days;
   document.getElementById('meat-target-loss').value = d.loss;
   updateSeasoningHints();
@@ -411,17 +421,139 @@ function calcMat(meat) {
   return { loss: loss, days: days, status: status, label: label, color: color, progress: progress, tLoss: tLoss, tDays: tDays };
 }
 
+// Velocity-based ETA: uses last 3 intervals; falls back to target rate with 1 weighing.
+// Returns { daysLeft, eta:Date, ratePerDay } or null if indeterminate.
+function calcEta(meat) {
+  var sorted = meat.weights.slice().sort(function (a, b) { return new Date(a.date) - new Date(b.date); });
+  var tLoss = meat.targetLoss || 30;
+  var currentLoss = (meat.initialWeight - sorted[sorted.length - 1].weight) / meat.initialWeight * 100;
+  var remaining = tLoss - currentLoss;
+  if (remaining <= 0) return { daysLeft: 0, eta: new Date(sorted[sorted.length - 1].date), ratePerDay: 0 };
+
+  var rate = null;
+  if (sorted.length >= 2) {
+    var N = Math.min(sorted.length - 1, 3);
+    var sumLoss = 0, sumDays = 0;
+    for (var i = sorted.length - N; i < sorted.length; i++) {
+      sumDays += (new Date(sorted[i].date) - new Date(sorted[i - 1].date)) / 86400000;
+      sumLoss += (sorted[i - 1].weight - sorted[i].weight) / meat.initialWeight * 100;
+    }
+    if (sumDays > 0 && sumLoss > 0) rate = sumLoss / sumDays;
+  }
+  if (rate === null) {
+    // Fallback: target rate
+    var targetRate = tLoss / (meat.targetDays || 60);
+    if (targetRate <= 0) return null;
+    rate = targetRate;
+  }
+  var daysLeft = Math.max(0, Math.round(remaining / rate));
+  var base = new Date(sorted[sorted.length - 1].date);
+  base.setDate(base.getDate() + daysLeft);
+  return { daysLeft: daysLeft, eta: base, ratePerDay: rate };
+}
+
 function formatWeight(g) {
   if (g >= 1000) return (g / 1000).toFixed(2) + ' kg';
   return Math.round(g) + ' g';
 }
 
+// Returns { current, projected } price in €/kg, or null if no price set.
+// current  = price / current_weight_in_kg
+// projected = price / weight_at_target_loss_in_kg
+function calcPricePerKg(meat) {
+  if (!meat.price) return null;
+  var lastW = meat.weights[meat.weights.length - 1].weight;
+  var targetW = meat.initialWeight * (1 - (meat.targetLoss || 30) / 100);
+  return {
+    current:   meat.price / (lastW    / 1000),
+    projected: meat.price / (targetW  / 1000),
+  };
+}
+
 // ══════════════════════════════════════════════════════
 // RENDER LIST
 // ══════════════════════════════════════════════════════
+function buildMeatCard(m) {
+  var mat = calcMat(m);
+  var c = mat.status === 'ready' ? 'var(--sage)' :
+    mat.status === 'almost' ? 'var(--warn)' :
+    mat.status === 'over' ? 'var(--danger)' :
+    mat.status === 'eaten' ? 'var(--muted)' : 'var(--blue)';
+  var eta = calcEta(m);
+  var ppkg = calcPricePerKg(m);
+  var done = mat.status === 'ready' || mat.status === 'over' || mat.status === 'eaten';
+  var etaMetric;
+  // For finished pieces with a price, replace the redundant "✓ Prêt" ETA with actual price/kg
+  if (done && ppkg) {
+    etaMetric = '<div class="metric"><div class="metric-k">Prix / kg réel</div><div class="metric-v" style="color:var(--copper2);">' + ppkg.current.toFixed(2) + ' <small>€/kg</small></div></div>';
+  } else if (!eta || m.archived) {
+    etaMetric = '<div class="metric"><div class="metric-k">Durée</div><div class="metric-v">' + mat.days + 'j <small>/ ' + mat.tDays + 'j</small></div></div>';
+  } else if (eta.daysLeft === 0) {
+    etaMetric = '<div class="metric"><div class="metric-k">Fin est.</div><div class="metric-v" style="color:var(--sage2);font-size:.75rem;">✓ Prêt</div></div>';
+  } else {
+    var etaFmt = eta.eta.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+    etaMetric = '<div class="metric"><div class="metric-k">Fin est.</div><div class="metric-v" style="font-size:.72rem;">' + etaFmt + ' <small>~' + eta.daysLeft + 'j</small></div></div>';
+  }
+  var card = document.createElement('div');
+  card.className = 'meat-card';
+  card.dataset.id = m.id;
+  card.innerHTML =
+    '<div class="card-stripe" style="background:linear-gradient(90deg,' + c + ',transparent)"></div>' +
+    '<div class="card-body">' +
+    '<div class="card-top">' +
+    '<div>' +
+    '<div class="card-name"><span style="margin-right:6px;">' + typeIcon(m.type) + '</span>' + m.name +
+    (m.smoked ? ' <span title="Fumé" style="font-size:0.9rem;margin-left:4px;filter:grayscale(1) brightness(1.5);">💨</span>' : '') +
+    '</div>' +
+    '<div class="card-type">' + typeLabel(m.type) + '</div>' +
+    '</div>' +
+    '<span class="card-progress-label">' + mat.progress + '%</span>' +
+    '</div>' +
+    '<div class="track"><div class="track-fill" style="width:' + mat.progress + '%;background:' + c + ';"></div></div>' +
+    '<div class="card-metrics">' +
+    '<div class="metric"><div class="metric-k">Perte</div><div class="metric-v">' + mat.loss.toFixed(1) + '% <small>/ ' + mat.tLoss + '%</small></div></div>' +
+    etaMetric +
+    '</div>' +
+    (!done && ppkg ? '<div class="card-ppkg">Prix/kg estimé <strong>' + ppkg.projected.toFixed(2) + ' €/kg</strong> <span>à objectif</span></div>' : '') +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto;">' +
+    '<span class="pill" style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;">' + mat.label + '</span>' +
+    '<div style="display:flex;gap:4px;">' +
+    '<button class="card-print-btn" onclick="event.stopPropagation();printLabels(\'' + m.id + '\',\'tracking\')" title="Étiquette QR">🔍</button>' +
+    '<button class="card-print-btn" onclick="event.stopPropagation();printLabels(\'' + m.id + '\',\'final\')" title="Étiquette finale">⭐</button>' +
+    '<button class="card-weigh-btn" onclick="quickWeigh(\'' + m.id + '\',event)" title="Pesée rapide">+</button>' +
+    '</div>' +
+    '</div>' +
+    '</div>';
+  card.addEventListener('click', function () { showMeatDetail(m.id); });
+  return card;
+}
+
 function renderList() {
   var isArchive = currentListView === 'archive';
   var displayMeats = meats.filter(function (m) { return !!m.archived === isArchive; });
+
+  // Filters
+  if (listFilterType)   displayMeats = displayMeats.filter(function (m) { return m.type === listFilterType; });
+  if (listFilterStatus) displayMeats = displayMeats.filter(function (m) { return calcMat(m).status === listFilterStatus; });
+
+  // Sort
+  if (listSort !== 'status') {
+    displayMeats = displayMeats.slice().sort(function (a, b) {
+      if (listSort === 'date')     return new Date(a.startDate) - new Date(b.startDate);
+      if (listSort === 'progress') return calcMat(b).progress - calcMat(a).progress;
+      if (listSort === 'eta') {
+        var ea = calcEta(a), eb = calcEta(b);
+        return (ea ? ea.daysLeft : 9999) - (eb ? eb.daysLeft : 9999);
+      }
+      if (listSort === 'type') return typeLabel(a.type).localeCompare(typeLabel(b.type));
+      return 0;
+    });
+  }
+
+  // Sync clear-filter button visibility
+  var clearBtn = document.getElementById('list-clear-btn');
+  if (clearBtn) clearBtn.style.display = (listFilterType || listFilterStatus || listSort !== 'status') ? 'inline-flex' : 'none';
+
   var el = document.getElementById('meat-list');
   var countEl = document.getElementById('meat-count');
   var weightEl = document.getElementById('meat-total-weight');
@@ -461,6 +593,19 @@ function renderList() {
     return;
   }
 
+  el.innerHTML = '';
+
+  if (listSort !== 'status') {
+    // ── Flat sorted grid ──────────────────────────────
+    var flatGrid = document.createElement('div');
+    flatGrid.className = 'grid';
+    displayMeats.forEach(function (m) { flatGrid.appendChild(buildMeatCard(m)); });
+    el.appendChild(flatGrid);
+    updateSettingsStats();
+    return;
+  }
+
+  // ── Grouped by status ─────────────────────────────
   var GROUPS = [
     { status: 'ready', label: 'Prêtes à déguster', color: 'var(--sage)', icon: '✦' },
     { status: 'almost', label: 'Bientôt prêtes', color: 'var(--warn)', icon: '◎' },
@@ -468,8 +613,6 @@ function renderList() {
     { status: 'over', label: 'Peut-être trop sec', color: 'var(--danger)', icon: '△' },
     { status: 'eaten', label: 'Archivées', color: 'var(--muted)', icon: '📦' },
   ];
-
-  el.innerHTML = '';
 
   GROUPS.forEach(function (g) {
     var group = displayMeats.filter(function (m) { return calcMat(m).status === g.status; });
@@ -496,51 +639,7 @@ function renderList() {
     var grid = document.createElement('div');
     grid.className = 'grid';
 
-    group.forEach(function (m) {
-      var mat = calcMat(m);
-      var c = mat.status === 'ready' ? 'var(--sage)' :
-        mat.status === 'almost' ? 'var(--warn)' :
-          mat.status === 'over' ? 'var(--danger)' :
-            mat.status === 'eaten' ? 'var(--muted)' : 'var(--blue)';
-
-      var card = document.createElement('div');
-      card.className = 'meat-card';
-      card.dataset.id = m.id;
-      card.innerHTML =
-        '<div class="card-stripe" style="background:linear-gradient(90deg,' + c + ',transparent)"></div>' +
-        '<div class="card-body">' +
-        '<div class="card-top">' +
-        '<div>' +
-        '<div class="card-name">' +
-        '<span style="margin-right:6px;">' + (TYPE_ICONS[m.type] || '🥩') + '</span>' +
-        m.name +
-        (m.smoked ? ' <span title="Fumé" style="font-size:0.9rem;margin-left:4px;filter:grayscale(1) brightness(1.5);">💨</span>' : '') +
-        '</div>' +
-        '<div class="card-type">' + m.type + '</div>' +
-        '</div>' +
-        '<span class="card-progress-label">' + mat.progress + '%</span>' +
-        '</div>' +
-        '<div class="track"><div class="track-fill" style="width:' + mat.progress + '%;background:' + c + ';"></div></div>' +
-        '<div class="card-metrics">' +
-        '<div class="metric"><div class="metric-k">Perte</div><div class="metric-v">' + mat.loss.toFixed(1) + '% <small>/ ' + mat.tLoss + '%</small></div></div>' +
-        '<div class="metric"><div class="metric-k">Durée</div><div class="metric-v">' + mat.days + 'j <small>/ ' + mat.tDays + 'j</small></div></div>' +
-        '</div>' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto;">' +
-        '<span class="pill" style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;">' + mat.label + '</span>' +
-        '<div style="display:flex;gap:4px;">' +
-        '<button class="card-print-btn" onclick="event.stopPropagation(); printLabels(\'' + m.id + '\', \'tracking\')" title="Étiquette de suivi (QR)">🔍</button>' +
-        '<button class="card-print-btn" onclick="event.stopPropagation(); printLabels(\'' + m.id + '\', \'final\')" title="Étiquette finale">⭐</button>' +
-        '</div>' +
-        '</div>' +
-        '</div>';
-
-      // Click handler
-      card.addEventListener('click', function () {
-        showMeatDetail(m.id);
-      });
-
-      grid.appendChild(card);
-    });
+    group.forEach(function (m) { grid.appendChild(buildMeatCard(m)); });
 
     groupDiv.appendChild(grid);
     el.appendChild(groupDiv);
@@ -598,12 +697,12 @@ function showMeatDetail(meatId) {
     '<div class="detail-grid">' +
     '<div>' +
     '<div class="big-name">' +
-    '<span style="margin-right:8px;">' + (TYPE_ICONS[meat.type] || '🥩') + '</span>' +
+    '<span style="margin-right:8px;">' + typeIcon(meat.type) + '</span>' +
     meat.name +
     (meat.smoked ? ' <span title="Fumé" style="font-size:0.8em;margin-left:8px;filter:grayscale(1) brightness(1.5);">💨</span>' : '') +
     (meat.archived ? ' <span style="font-size:0.45em;vertical-align:middle;padding:3px 6px;border-radius:4px;background:var(--ink4);color:var(--muted);border:1px solid var(--border)">ARCHIVÉ</span>' : '') +
     '</div>' +
-    '<div class="big-type">' + meat.type + '</div>' +
+    '<div class="big-type">' + typeLabel(meat.type) + '</div>' +
     '<div class="status-block" style="background:' + stripeColor + '12;border:1px solid ' + stripeColor + '33;">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;">' +
     '<span class="pill" style="background:' + stripeColor + '22;color:' + stripeColor + ';border:1px solid ' + stripeColor + '44;">' + mat.label + '</span>' +
@@ -612,8 +711,22 @@ function showMeatDetail(meatId) {
     '<div class="progress-xl"><div class="progress-xl-fill" style="width:' + mat.progress + '%;background:' + stripeColor + ';"></div></div>' +
     '<div class="three-metrics">' +
     '<div class="mbox"><div class="mbox-k">Perte</div><div class="mbox-v" style="color:' + stripeColor + ';">' + mat.loss.toFixed(1) + '%</div><div class="mbox-s">/ ' + mat.tLoss + '%</div></div>' +
-    '<div class="mbox"><div class="mbox-k">Durée</div><div class="mbox-v" style="color:var(--copper2);">' + mat.days + 'j</div><div class="mbox-s">/ ' + mat.tDays + 'j</div></div>' +
-    '<div class="mbox"><div class="mbox-k">Poids actuel</div><div class="mbox-v" style="color:var(--ivory2);">' + lastW.weight + 'g</div><div class="mbox-s">initial : ' + meat.initialWeight + 'g</div></div>' +
+    (function () {
+      var eta = calcEta(meat);
+      if (!eta) return '<div class="mbox"><div class="mbox-k">Durée</div><div class="mbox-v" style="color:var(--copper2);">' + mat.days + 'j</div><div class="mbox-s">/ ' + mat.tDays + 'j</div></div>';
+      if (eta.daysLeft === 0) return '<div class="mbox"><div class="mbox-k">Fin estimée</div><div class="mbox-v" style="color:var(--sage2);font-size:.85rem;">✓ Atteint</div><div class="mbox-s">objectif perte</div></div>';
+      var etaFmt = eta.eta.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+      var note = eta.ratePerDay ? eta.ratePerDay.toFixed(2) + '%/j' : 'cible';
+      return '<div class="mbox"><div class="mbox-k">Fin estimée</div><div class="mbox-v" style="color:var(--copper2);font-size:.82rem;">' + etaFmt + '</div><div class="mbox-s">~' + eta.daysLeft + 'j · ' + note + '</div></div>';
+    })() +
+    (function () {
+      var ppkg2 = calcPricePerKg(meat);
+      var done2 = mat.status === 'ready' || mat.status === 'over' || mat.status === 'eaten';
+      if (ppkg2 && done2) {
+        return '<div class="mbox"><div class="mbox-k">Prix / kg réel</div><div class="mbox-v" style="color:var(--copper2);">' + ppkg2.current.toFixed(2) + ' €</div><div class="mbox-s">achat : ' + meat.price.toFixed(2) + ' €</div></div>';
+      }
+      return '<div class="mbox"><div class="mbox-k">Poids actuel</div><div class="mbox-v" style="color:var(--ivory2);">' + lastW.weight + 'g</div><div class="mbox-s">initial : ' + meat.initialWeight + 'g</div></div>';
+    })() +
     '</div>' +
     '</div>' +
 
@@ -630,7 +743,8 @@ function showMeatDetail(meatId) {
 
     '<div class="chart-wrap">' +
     '<div class="chart-label">Courbe de séchage</div>' +
-    '<canvas id="weight-chart" height="200"></canvas>' +
+    '<div class="chart-canvas-wrap"><canvas id="weight-chart"></canvas></div>' +
+    '<div id="chart-info" class="chart-info"></div>' +
     '</div>' +
 
     '<div style="margin-top:1rem;">' +
@@ -656,7 +770,16 @@ function showMeatDetail(meatId) {
     '<div class="irow"><span class="irow-k">Date de début</span><span class="irow-v">' + new Date(meat.startDate).toLocaleDateString('fr-FR') + '</span></div>' +
     '<div class="irow"><span class="irow-k">Dernière pesée</span><span class="irow-v">' + new Date(lastW.date).toLocaleDateString('fr-FR') + '</span></div>' +
     (meat.smoked ? '<div class="irow"><span class="irow-k">Traitement</span><span class="irow-v">💨 Fumé</span></div>' : '') +
-    (meat.price !== null && meat.price !== undefined ? '<div class="irow"><span class="irow-k">Prix</span><span class="irow-v">' + meat.price.toFixed(2) + ' €</span></div>' : '') +
+    (meat.price !== null && meat.price !== undefined ? '<div class="irow"><span class="irow-k">Prix d\'achat</span><span class="irow-v">' + meat.price.toFixed(2) + ' €</span></div>' : '') +
+    (function () {
+      var ppkg = calcPricePerKg(meat);
+      if (!ppkg) return '';
+      var matD = calcMat(meat);
+      var done = matD.status === 'ready' || matD.status === 'over' || matD.status === 'eaten';
+      var actual = '<div class="irow"><span class="irow-k">Prix/kg ' + (done ? 'réel' : 'actuel') + '</span><span class="irow-v" style="color:var(--copper2);font-weight:600;">' + ppkg.current.toFixed(2) + ' €/kg</span></div>';
+      var proj = done ? '' : '<div class="irow"><span class="irow-k">Prix/kg estimé</span><span class="irow-v" style="color:var(--muted);">' + ppkg.projected.toFixed(2) + ' €/kg <span style="font-size:.7rem;">à objectif</span></span></div>';
+      return actual + proj;
+    })() +
     (meat.salt ? '<div class="irow"><span class="irow-k">Sel</span><span class="irow-v">' + meat.salt + 'g <span style=\'color:var(--muted);font-size:.7rem;\'>' + (meat.salt / meat.initialWeight * 100).toFixed(1) + '%</span></span></div>' : '') +
     (meat.sugar ? '<div class="irow"><span class="irow-k">Sucre</span><span class="irow-v">' + meat.sugar + 'g <span style=\'color:var(--muted);font-size:.7rem;\'>' + (meat.sugar / meat.initialWeight * 100).toFixed(1) + '%</span></span></div>' : '') +
     (meat.spices ? '<div class="irow"><span class="irow-k">Épices</span><span class="irow-v" style=\'font-family:var(--font-body, Syne);font-size:.75rem;text-align:right;max-width:130px;word-break:break-word;\'>' + meat.spices + '</span></div>' : '') +
@@ -726,19 +849,69 @@ async function deleteWeight(idx, eid) {
 }
 
 // ══════════════════════════════════════════════════════
+// QUICK WEIGH
+// ══════════════════════════════════════════════════════
+function quickWeigh(meatId, event) {
+  event.stopPropagation();
+  var meat = meats.find(function (m) { return m.id === meatId; });
+  if (!meat) return;
+  quickWeighMeatId = meatId;
+
+  var lastW = meat.weights[meat.weights.length - 1];
+  document.getElementById('qw-name').textContent = meat.name;
+  document.getElementById('qw-last-weight').textContent = lastW.weight + ' g';
+  document.getElementById('qw-last-date').textContent = new Date(lastW.date).toLocaleDateString('fr-FR');
+
+  var wInput = document.getElementById('qw-weight');
+  var dInput = document.getElementById('qw-date');
+  wInput.value = '';
+  dInput.valueAsDate = new Date();
+
+  var overlay = document.getElementById('quick-weigh-overlay');
+  overlay.classList.add('open');
+  setTimeout(function () { wInput.focus(); }, 80);
+}
+
+function closeQuickWeigh() {
+  document.getElementById('quick-weigh-overlay').classList.remove('open');
+  quickWeighMeatId = null;
+}
+
+async function submitQuickWeight() {
+  var w = parseFloat(document.getElementById('qw-weight').value);
+  var d = document.getElementById('qw-date').value || new Date().toISOString().split('T')[0];
+  if (!w || w <= 0 || !quickWeighMeatId) {
+    showToast('Poids invalide', 'error');
+    return;
+  }
+  var btn = document.getElementById('qw-submit-btn');
+  if (btn) btn.disabled = true;
+  try {
+    var updated = await apiFetch('/api/meats/' + quickWeighMeatId + '/weights', { method: 'POST', body: { weight: w, date: d } });
+    meats = meats.map(function (m) { return m.id === updated.id ? updated : m; });
+    closeQuickWeigh();
+    renderList();
+    showToast('Pesée enregistrée ✓');
+  } catch (e) {
+    showToast('Erreur : ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════
 // EDIT MEAT FORM
 // ══════════════════════════════════════════════════════
 function showEditMeatForm(meatId) {
   var meat = meats.find(function (m) { return m.id === meatId; });
   if (!meat) return;
   currentMeat = meat;
-  var types = ['coppa', 'lonzo', 'pancetta', 'guanciale', 'bresaola', 'jambon', 'saucisson', 'magret', 'filet_mignon', 'boeuf_seche', 'jerky', 'lomo', 'pastrami', 'autre'];
-  var opts = types.map(function (t) { return '<option value="' + t + '"' + (meat.type === t ? ' selected' : '') + '>' + t.charAt(0).toUpperCase() + t.slice(1) + '</option>'; }).join('');
+  var opts = buildTypeOptions(meat.type);
   document.getElementById('detail-view').innerHTML =
     '<div style="display:flex;gap:.625rem;margin-bottom:1.5rem;">' +
     '<button class="btn btn-ghost btn-sm" onclick="showMeatDetail(\'' + meat.id + '\')">← Annuler</button>' +
     '</div>' +
-    '<div class="page-head"><div class="page-head-left"><div class="eyebrow">Modification</div><h2><span style="margin-right:8px;">' + (TYPE_ICONS[meat.type] || '🥩') + '</span>' + meat.name + '</h2></div></div>' +
+    '<div class="page-head"><div class="page-head-left"><div class="eyebrow">Modification</div><h2><span style="margin-right:8px;">' + typeIcon(meat.type) + '</span>' + meat.name + '</h2></div></div>' +
     '<div class="form-shell">' +
     '<div class="form-divider" style="margin-top:0;border-top:none;">Identification</div>' +
     '<div class="fg"><label>Nom</label><input type="text" id="em-name" value="' + meat.name + '"></div>' +
@@ -870,7 +1043,7 @@ function printLabels(ids, type) {
     var loss = ((meat.initialWeight - lastW.weight) / meat.initialWeight * 100).toFixed(1);
     var startFmt = new Date(meat.startDate).toLocaleDateString('fr-FR');
     var durationDays = Math.round((new Date(lastW.date) - new Date(meat.startDate)) / (24 * 3600 * 1000));
-    var meatIcon = TYPE_ICONS[meat.type] || '🥩';
+    var meatIcon = typeIcon(meat.type);
 
     if (type === 'final') {
       labelsHTML +=
@@ -1087,56 +1260,249 @@ function scanQRCode() {
 // ══════════════════════════════════════════════════════
 // CHART
 // ══════════════════════════════════════════════════════
+var weightChartInstance = null;
+
+// Rythme sain : 0.2 – 1.5 %/jour. En dessous = plateau, au-dessus = trop rapide.
+var RATE_PLATEAU  = 0.2;
+var RATE_TOO_FAST = 1.5;
+
 function renderChart(meat) {
   var canvas = document.getElementById('weight-chart');
   if (!canvas || !window.Chart) return;
-  var sorted = meat.weights.slice().sort(function (a, b) { return new Date(a.date) - new Date(b.date); });
-  var tLoss = meat.targetLoss || 30;
-  var tDays = meat.targetDays || 60;
-  var tWeight = parseFloat((meat.initialWeight * (1 - tLoss / 100)).toFixed(0));
-  var tDate = new Date(meat.startDate);
-  tDate.setDate(tDate.getDate() + tDays);
-  var tLabel = tDate.toLocaleDateString('fr-FR');
-  var rLabels = sorted.map(function (w) { return new Date(w.date).toLocaleDateString('fr-FR'); });
-  var allLabels = rLabels.indexOf(tLabel) >= 0 ? rLabels : rLabels.concat([tLabel]);
-  var rWeights = sorted.map(function (w) { return w.weight; });
-  var rLosses = sorted.map(function (w) { return parseFloat(((meat.initialWeight - w.weight) / meat.initialWeight * 100).toFixed(1)); });
-  var hasExtra = rLabels.indexOf(tLabel) < 0;
-  var wData = hasExtra ? rWeights.concat([null]) : rWeights;
-  var lData = hasExtra ? rLosses.concat([null]) : rLosses;
-  var lw = rWeights[rWeights.length - 1], ll = rLosses[rLosses.length - 1];
-  var projW = allLabels.map(function (_, i) { if (i === rWeights.length - 1) return lw; if (i === allLabels.length - 1 && hasExtra) return tWeight; return null; });
-  var projL = allLabels.map(function (_, i) { if (i === rLosses.length - 1) return ll; if (i === allLabels.length - 1 && hasExtra) return tLoss; return null; });
-  var tLine = allLabels.map(function () { return tLoss; });
-  var tMin = allLabels.map(function () { return Math.max(0, tLoss - 2); });
-  var tMax = allLabels.map(function () { return tLoss + 2; });
 
-  new Chart(canvas, {
+  if (weightChartInstance) { weightChartInstance.destroy(); weightChartInstance = null; }
+
+  var sorted = meat.weights.slice().sort(function (a, b) { return new Date(a.date) - new Date(b.date); });
+  if (!sorted.length) return;
+
+  var tLoss   = meat.targetLoss || 30;
+  var tDays   = meat.targetDays || 60;
+  var tWeight = parseFloat((meat.initialWeight * (1 - tLoss / 100)).toFixed(0));
+  var tDate   = new Date(meat.startDate);
+  tDate.setDate(tDate.getDate() + tDays);
+  var tLabel  = tDate.toLocaleDateString('fr-FR');
+
+  var rLabels  = sorted.map(function (w) { return new Date(w.date).toLocaleDateString('fr-FR'); });
+  var hasExtra = rLabels.indexOf(tLabel) < 0;
+  var allLabels = hasExtra ? rLabels.concat([tLabel]) : rLabels;
+
+  var rWeights = sorted.map(function (w) { return w.weight; });
+  var rLosses  = sorted.map(function (w) {
+    return parseFloat(((meat.initialWeight - w.weight) / meat.initialWeight * 100).toFixed(2));
+  });
+
+  // Rythme (%/jour) entre chaque pesée consécutive
+  var rates = sorted.map(function (w, i) {
+    if (i === 0) return null;
+    var days = (new Date(w.date) - new Date(sorted[i - 1].date)) / 86400000;
+    if (days <= 0) return null;
+    var stepLoss = (sorted[i - 1].weight - w.weight) / meat.initialWeight * 100;
+    return parseFloat((stepLoss / days).toFixed(2));
+  });
+
+  // Couleur des points selon le rythme
+  var C_NEUTRAL = '#818cf8'; // indigo
+  var C_GOOD    = '#5a8a6a'; // vert
+  var C_PLATEAU = '#f59e0b'; // ambre
+  var C_FAST    = '#ef4444'; // rouge
+  var pointColors = sorted.map(function (_, i) {
+    var r = rates[i];
+    if (r === null) return C_NEUTRAL;
+    if (r < RATE_PLATEAU)  return C_PLATEAU;
+    if (r > RATE_TOO_FAST) return C_FAST;
+    return C_GOOD;
+  });
+
+  // Dernier rythme connu
+  var currentRate = null;
+  for (var i = rates.length - 1; i >= 0; i--) {
+    if (rates[i] !== null) { currentRate = rates[i]; break; }
+  }
+
+  var lw = rWeights[rWeights.length - 1];
+  var ll = rLosses[rLosses.length - 1];
+
+  // Datasets avec ou sans point cible projeté
+  var wData  = hasExtra ? rWeights.concat([null]) : rWeights;
+  var lData  = hasExtra ? rLosses.concat([null])  : rLosses;
+  var projW  = allLabels.map(function (_, i) {
+    if (i === rWeights.length - 1) return lw;
+    if (hasExtra && i === allLabels.length - 1) return tWeight;
+    return null;
+  });
+  var projL  = allLabels.map(function (_, i) {
+    if (i === rLosses.length - 1) return ll;
+    if (hasExtra && i === allLabels.length - 1) return tLoss;
+    return null;
+  });
+  var tLine  = allLabels.map(function () { return tLoss; });
+  var tMin   = allLabels.map(function () { return Math.max(0, tLoss - 2); });
+  var tMax   = allLabels.map(function () { return tLoss + 2; });
+  var rateData = rates.concat(hasExtra ? [null] : []);
+
+  // Couleur des barres de rythme
+  var barColors = rateData.map(function (r) {
+    if (r === null) return 'transparent';
+    if (r < RATE_PLATEAU)  return 'rgba(245,158,11,0.5)';
+    if (r > RATE_TOO_FAST) return 'rgba(239,68,68,0.5)';
+    return 'rgba(90,138,106,0.45)';
+  });
+
+  var lossAxisMax = Math.max(55, tLoss + 12);
+
+  weightChartInstance = new Chart(canvas, {
     type: 'line',
     data: {
-      labels: allLabels, datasets: [
-        { label: 'Poids (g)', data: wData, borderColor: '#b8722a', backgroundColor: 'rgba(184,114,42,.1)', borderWidth: 2.5, pointBackgroundColor: '#b8722a', pointRadius: 4, tension: 0.35, fill: false, yAxisID: 'yW', spanGaps: false },
-        { label: 'Projection → ' + tWeight + 'g', data: projW, borderColor: 'rgba(184,114,42,.45)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: function (c) { return c.dataIndex === allLabels.length - 1 ? 6 : 0; }, tension: 0.2, fill: false, yAxisID: 'yW', spanGaps: true },
-        { label: 'Perte (%)', data: lData, borderColor: '#5a8a6a', backgroundColor: 'rgba(90,138,106,.08)', borderWidth: 2, pointBackgroundColor: '#5a8a6a', pointRadius: 4, tension: 0.35, fill: false, yAxisID: 'yL', spanGaps: false },
-        { label: 'Objectif ' + tLoss + '%', data: tLine, borderColor: 'rgba(90,138,106,.7)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, fill: false, yAxisID: 'yL' },
-        { label: 'Zone min', data: tMin, borderColor: 'transparent', backgroundColor: 'rgba(90,138,106,.1)', borderWidth: 0, pointRadius: 0, fill: '+1', yAxisID: 'yL' },
-        { label: 'Zone max', data: tMax, borderColor: 'transparent', backgroundColor: 'transparent', borderWidth: 0, pointRadius: 0, fill: false, yAxisID: 'yL' },
+      labels: allLabels,
+      datasets: [
+        // Courbe de poids
+        {
+          label: 'Poids (g)', data: wData,
+          borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.08)',
+          borderWidth: 2.5, tension: 0.3, fill: false, yAxisID: 'yW', spanGaps: false, order: 2,
+          pointBackgroundColor: pointColors, pointBorderColor: pointColors,
+          pointRadius: 5, pointHoverRadius: 7,
+        },
+        // Projection poids
+        {
+          label: 'Proj. → ' + tWeight + 'g', data: projW,
+          borderColor: 'rgba(129,140,248,0.35)', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [5, 4], tension: 0.2, fill: false, yAxisID: 'yW', spanGaps: true, order: 3,
+          pointBackgroundColor: '#818cf8', pointBorderColor: '#818cf8',
+          pointRadius: function (c) { return hasExtra && c.dataIndex === allLabels.length - 1 ? 5 : 0; },
+        },
+        // Courbe de perte
+        {
+          label: 'Perte (%)', data: lData,
+          borderColor: '#5a8a6a', backgroundColor: 'rgba(90,138,106,0.07)',
+          borderWidth: 2, tension: 0.3, fill: false, yAxisID: 'yL', spanGaps: false, order: 2,
+          pointBackgroundColor: pointColors, pointBorderColor: pointColors,
+          pointRadius: 5, pointHoverRadius: 7,
+        },
+        // Ligne objectif
+        {
+          label: 'Objectif ' + tLoss + '%', data: tLine,
+          borderColor: 'rgba(90,138,106,0.6)', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, fill: false, yAxisID: 'yL', order: 4,
+        },
+        // Zone objectif ±2 %
+        {
+          label: '_zone_min', data: tMin,
+          borderColor: 'transparent', backgroundColor: 'rgba(90,138,106,0.1)',
+          borderWidth: 0, pointRadius: 0, fill: '+1', yAxisID: 'yL', order: 5,
+        },
+        {
+          label: '_zone_max', data: tMax,
+          borderColor: 'transparent', backgroundColor: 'transparent',
+          borderWidth: 0, pointRadius: 0, fill: false, yAxisID: 'yL', order: 5,
+        },
+        // Barres de rythme (%/jour)
+        {
+          label: 'Rythme (%/j)', type: 'bar', data: rateData,
+          backgroundColor: barColors, borderColor: 'transparent', borderRadius: 3,
+          yAxisID: 'yR', order: 1,
+        },
       ]
     },
     options: {
-      responsive: true,
+      responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { color: '#6a5a4a', font: { size: 11 }, filter: function (i) { return !i.text.includes('Zone'); }, boxWidth: 16 } },
-        tooltip: { backgroundColor: 'rgba(18,15,13,.95)', titleColor: '#b8722a', bodyColor: '#f2ead8', borderColor: 'rgba(184,114,42,.3)', borderWidth: 1, callbacks: { label: function (c) { if (c.dataset.label.includes('Zone')) return null; return ' ' + c.dataset.label + ': ' + c.parsed.y + (c.dataset.yAxisID === 'yL' ? '%' : 'g'); } } }
+        legend: {
+          labels: {
+            color: '#7a8a9a', font: { size: 11 }, boxWidth: 14,
+            filter: function (item) { return !item.text.startsWith('_') && !item.text.startsWith('Proj.'); }
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(2,6,23,0.95)', titleColor: '#818cf8',
+          bodyColor: '#e2e8f0', borderColor: 'rgba(129,140,248,0.25)', borderWidth: 1,
+          callbacks: {
+            label: function (c) {
+              if (c.dataset.label.startsWith('_')) return null;
+              var v = c.parsed.y;
+              if (v === null || v === undefined) return null;
+              var unit = c.dataset.yAxisID === 'yW' ? 'g' : '%' + (c.dataset.yAxisID === 'yR' ? '/j' : '');
+              return '  ' + c.dataset.label + ' : ' + v + unit;
+            }
+          }
+        }
       },
       scales: {
-        x: { ticks: { color: '#6a5a4a', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.04)' } },
-        yW: { position: 'left', ticks: { color: '#b8722a', font: { size: 10 }, callback: function (v) { return v + 'g'; } }, grid: { color: 'rgba(255,255,255,.04)' } },
-        yL: { position: 'right', min: 0, max: 50, ticks: { color: '#5a8a6a', font: { size: 10 }, callback: function (v) { return v + '%'; } }, grid: { drawOnChartArea: false } }
+        x: { ticks: { color: '#4a5a6a', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        yW: {
+          position: 'left',
+          ticks: { color: '#818cf8', font: { size: 10 }, callback: function (v) { return v + 'g'; } },
+          grid: { color: 'rgba(255,255,255,0.04)' }
+        },
+        yL: {
+          position: 'right', min: 0, max: lossAxisMax,
+          ticks: { color: '#5a8a6a', font: { size: 10 }, callback: function (v) { return v + '%'; } },
+          grid: { drawOnChartArea: false }
+        },
+        yR: {
+          position: 'right', min: 0, max: 4, display: false,
+          grid: { drawOnChartArea: false }
+        }
       }
     }
   });
+
+  renderChartInfo(meat, sorted, currentRate, tWeight, tLoss);
+}
+
+function renderChartInfo(meat, sorted, currentRate, tWeight, tLoss) {
+  var el = document.getElementById('chart-info');
+  if (!el) return;
+
+  var lastW       = sorted[sorted.length - 1];
+  var currentLoss = (meat.initialWeight - lastW.weight) / meat.initialWeight * 100;
+  var remaining   = tLoss - currentLoss;
+
+  // Statut du rythme actuel
+  var rateLabel = '—';
+  var rateColor = '#7a8a9a';
+  if (currentRate !== null) {
+    var rateText = currentRate.toFixed(2) + ' %/j';
+    if (currentRate < RATE_PLATEAU)       { rateLabel = rateText + ' · Plateau'; rateColor = '#f59e0b'; }
+    else if (currentRate > RATE_TOO_FAST) { rateLabel = rateText + ' · Trop rapide'; rateColor = '#ef4444'; }
+    else                                  { rateLabel = rateText + ' · Bon rythme'; rateColor = '#5a8a6a'; }
+  }
+
+  // Estimation de fin selon rythme actuel
+  var etaHtml = '';
+  if (currentRate && currentRate > 0 && remaining > 0) {
+    var daysLeft = Math.round(remaining / currentRate);
+    var etaDate  = new Date(lastW.date);
+    etaDate.setDate(etaDate.getDate() + daysLeft);
+    etaHtml =
+      '<div class="chart-info-item">' +
+      '<div class="chart-info-k">Estimation fin</div>' +
+      '<div class="chart-info-v" style="color:#818cf8;">' + etaDate.toLocaleDateString('fr-FR') + ' <span style="color:#4a5a6a;">+' + daysLeft + 'j</span></div>' +
+      '</div>';
+  } else if (remaining <= 0) {
+    etaHtml =
+      '<div class="chart-info-item">' +
+      '<div class="chart-info-k">Objectif</div>' +
+      '<div class="chart-info-v" style="color:#5a8a6a;">✓ Atteint</div>' +
+      '</div>';
+  }
+
+  // Reste à perdre
+  var restHtml = remaining > 0
+    ? remaining.toFixed(1) + '% · ' + Math.max(0, lastW.weight - tWeight).toFixed(0) + 'g'
+    : '— objectif dépassé';
+
+  el.innerHTML =
+    '<div class="chart-info-item">' +
+    '<div class="chart-info-k">Rythme actuel</div>' +
+    '<div class="chart-info-v" style="color:' + rateColor + ';">' + rateLabel + '</div>' +
+    '</div>' +
+    etaHtml +
+    '<div class="chart-info-item">' +
+    '<div class="chart-info-k">Reste à perdre</div>' +
+    '<div class="chart-info-v">' + restHtml + '</div>' +
+    '</div>';
 }
 
 var envChartInstance = null;
@@ -1263,7 +1629,285 @@ async function toggleArchiveMeat(meatId, state) {
 // ══════════════════════════════════════════════════════
 // NAVIGATION
 // ══════════════════════════════════════════════════════
-var VIEW_LABELS = { list: 'Mes pièces', archive: 'Archives', add: 'Nouvelle pièce', scan: 'Scanner QR', settings: 'Paramètres', detail: 'Détail', history: 'Historique' };
+// ══════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════
+function refreshDashboard() {
+  fetch('/api/sensors')
+    .then(function (res) { return res.json(); })
+    .then(function (data) { _dashSensorData = data; renderDashboard(); })
+    .catch(function () { _dashSensorData = null; renderDashboard(); });
+}
+
+function renderDashboard() {
+  var el = document.getElementById('dashboard-view');
+  if (!el) return;
+
+  var active = meats.filter(function (m) { return !m.archived; });
+  var ready  = active.filter(function (m) { return calcMat(m).status === 'ready'; });
+  var over   = active.filter(function (m) { return calcMat(m).status === 'over'; });
+  var totalW = active.reduce(function (sum, m) { return sum + m.weights[m.weights.length - 1].weight; }, 0);
+
+  var alerts = buildDashboardAlerts(active);
+
+  var toWeigh = active.slice()
+    .map(function (m) {
+      var lastW = m.weights[m.weights.length - 1];
+      return { m: m, daysSince: Math.floor((new Date() - new Date(lastW.date)) / 86400000) };
+    })
+    .sort(function (a, b) { return b.daysSince - a.daysSince; })
+    .slice(0, 6);
+
+  // ── Page header ──────────────────────────────────────
+  var producerName = (function () {
+    var el = document.getElementById('setting-producer-name');
+    return el && el.value ? el.value : "Cave d'Affinage";
+  }());
+
+  var html =
+    '<div class="page-head">' +
+      '<div class="page-head-left">' +
+        '<div class="eyebrow">' + producerName + '</div>' +
+        '<h2>Tableau de bord</h2>' +
+      '</div>' +
+      '<button class="btn btn-ghost btn-sm" onclick="refreshDashboard()" title="Actualiser" style="font-size:1rem;">↻</button>' +
+    '</div>';
+
+  // ── KPI strip ────────────────────────────────────────
+  html += '<div class="db-kpis">' +
+    dbKpi(active.length, 'Pièces actives',   'var(--copper2)',                                  "showView('list')") +
+    dbKpi(ready.length,  'Prêtes',           ready.length  ? 'var(--sage2)'   : 'var(--muted)', "showView('list')") +
+    dbKpi(over.length,   'Trop sèches',      over.length   ? 'var(--danger)'  : 'var(--muted)', "showView('list')") +
+    dbKpi(formatWeight(totalW), 'Poids cave','var(--ivory2)',                                    null) +
+    dbKpi(alerts.length, 'Alertes',          alerts.length ? 'var(--warn)'    : 'var(--muted)', null) +
+  '</div>';
+
+  // ── Two-column section ───────────────────────────────
+  html += '<div class="db-grid">';
+
+  // Alertes
+  html += '<div class="dcard"><div class="dcard-title">Alertes actives</div>';
+  if (!alerts.length) {
+    html += '<div class="db-empty-s" style="color:var(--sage2);">✓ Tout va bien</div>';
+  } else {
+    alerts.forEach(function (a) {
+      var dot = a.level === 'danger' ? '#ef4444' : '#f59e0b';
+      var onclick = a.onclick ? ' onclick="' + a.onclick + '"' : '';
+      html += '<div class="db-alert"' + onclick + (a.onclick ? ' style="cursor:pointer;"' : '') + '>' +
+        '<span class="db-alert-dot" style="background:' + dot + ';box-shadow:0 0 5px ' + dot + '55;"></span>' +
+        '<span>' + a.msg + '</span>' +
+      '</div>';
+    });
+  }
+  html += '</div>';
+
+  // Prochaines pesées
+  html += '<div class="dcard"><div class="dcard-title">Prochaines pesées</div>';
+  if (!toWeigh.length) {
+    html += '<div class="db-empty-s">Aucune pièce active</div>';
+  } else {
+    var threshold = weighInterval > 0 ? weighInterval : 7;
+    toWeigh.forEach(function (item) {
+      var d = item.daysSince;
+      var c = d >= threshold ? '#ef4444' : d >= Math.floor(threshold * 0.65) ? '#f59e0b' : '#5a8a6a';
+      var dayTxt = d === 0 ? "Auj." : d + 'j';
+      html += '<div class="db-weigh-row" onclick="showMeatDetail(\'' + item.m.id + '\')">' +
+        '<span style="font-size:1.1rem;flex-shrink:0;">' + typeIcon(item.m.type) + '</span>' +
+        '<span class="db-weigh-name">' + item.m.name + '</span>' +
+        '<span class="db-days-badge" style="background:' + c + '18;color:' + c + ';border:1px solid ' + c + '44;">' + dayTxt + '</span>' +
+        '<button class="card-weigh-btn" style="width:26px;height:26px;font-size:1rem;" onclick="quickWeigh(\'' + item.m.id + '\', event)" title="Pesée rapide">+</button>' +
+      '</div>';
+    });
+  }
+  html += '</div>';
+
+  html += '</div>'; // end db-grid
+
+  // ── Prêtes à déguster ────────────────────────────────
+  if (ready.length) {
+    html += '<div class="dcard" style="margin-top:1rem;">' +
+      '<div class="dcard-title">Prêtes à déguster · ' + ready.length + '</div>' +
+      '<div class="db-ready-grid">';
+    ready.forEach(function (m) {
+      var mat = calcMat(m);
+      html += '<div class="db-ready-card" onclick="showMeatDetail(\'' + m.id + '\')">' +
+        '<div style="font-size:1.6rem;margin-bottom:.35rem;">' + typeIcon(m.type) + '</div>' +
+        '<div class="db-ready-name">' + m.name + '</div>' +
+        '<div style="font-family:\'Fira Code\',monospace;font-size:.75rem;color:var(--sage2);margin-top:.2rem;">−' + mat.loss.toFixed(1) + '%</div>' +
+      '</div>';
+    });
+    html += '</div></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function dbKpi(value, label, color, onclick) {
+  var attr = onclick ? ' onclick="' + onclick + '"' : '';
+  var cls  = onclick ? ' db-kpi-clickable' : '';
+  return '<div class="db-kpi' + cls + '"' + attr + '>' +
+    '<div class="db-kpi-n" style="color:' + color + ';">' + value + '</div>' +
+    '<div class="db-kpi-l">' + label + '</div>' +
+  '</div>';
+}
+
+function buildDashboardAlerts(active) {
+  var alerts = [];
+
+  if (_dashSensorData && _dashSensorData.current && _dashSensorData.current.temperature !== null) {
+    var cur  = _dashSensorData.current;
+    var set  = _dashSensorData.settings;
+    var staleMin = Math.floor((new Date() - new Date(cur.updatedAt)) / 60000);
+    if (staleMin > 30) {
+      alerts.push({ level: 'warn', msg: '📡 Capteur obsolète (' + staleMin + ' min)', onclick: "showView('history')" });
+    } else if (set) {
+      if (cur.temperature < set.temp_min)
+        alerts.push({ level: 'danger', msg: '🌡 Temp. trop basse : ' + cur.temperature.toFixed(1) + '°C (min ' + set.temp_min + '°C)', onclick: "showView('history')" });
+      else if (cur.temperature > set.temp_max)
+        alerts.push({ level: 'danger', msg: '🌡 Temp. trop haute : ' + cur.temperature.toFixed(1) + '°C (max ' + set.temp_max + '°C)', onclick: "showView('history')" });
+      if (cur.humidity < set.hum_min)
+        alerts.push({ level: 'warn', msg: '💧 Humidité trop basse : ' + cur.humidity.toFixed(1) + '% (min ' + set.hum_min + '%)', onclick: "showView('history')" });
+      else if (cur.humidity > set.hum_max)
+        alerts.push({ level: 'warn', msg: '💧 Humidité trop haute : ' + cur.humidity.toFixed(1) + '% (max ' + set.hum_max + '%)', onclick: "showView('history')" });
+    }
+  }
+
+  active.filter(function (m) { return calcMat(m).status === 'over'; })
+    .forEach(function (m) {
+      alerts.push({ level: 'danger', msg: '⚠ ' + m.name + ' · Peut-être trop sec', onclick: "showMeatDetail('" + m.id + "')" });
+    });
+
+  return alerts;
+}
+
+// ══════════════════════════════════════════════════════
+// SORT & FILTER
+// ══════════════════════════════════════════════════════
+function setListSort(val) {
+  listSort = val;
+  renderList();
+}
+
+function setListFilter(key, val) {
+  if (key === 'type') listFilterType = val;
+  else listFilterStatus = val;
+  renderList();
+}
+
+function clearListFilters() {
+  listSort = 'status'; listFilterType = ''; listFilterStatus = '';
+  var s = document.getElementById('list-sort');
+  var ft = document.getElementById('list-filter-type');
+  var fs = document.getElementById('list-filter-status');
+  if (s)  s.value  = 'status';
+  if (ft) ft.value = '';
+  if (fs) fs.value = '';
+  renderList();
+}
+
+// ══════════════════════════════════════════════════════
+// TOUR MODE
+// ══════════════════════════════════════════════════════
+function startTour() {
+  tourList = meats
+    .filter(function (m) { return !m.archived; })
+    .slice()
+    .sort(function (a, b) {
+      var la = new Date(a.weights[a.weights.length - 1].date);
+      var lb = new Date(b.weights[b.weights.length - 1].date);
+      return la - lb; // most overdue first
+    });
+  if (!tourList.length) { showToast('Aucune pièce active', 'info'); return; }
+  tourIdx = 0;
+  document.getElementById('tour-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  renderTour();
+}
+
+function closeTour() {
+  document.getElementById('tour-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+  tourList = []; tourIdx = 0;
+}
+
+function tourNav(delta) {
+  tourIdx = Math.max(0, Math.min(tourList.length - 1, tourIdx + delta));
+  renderTour();
+}
+
+function renderTour() {
+  var overlay = document.getElementById('tour-overlay');
+  if (!overlay || !tourList.length) return;
+  var m = tourList[tourIdx];
+  var mat = calcMat(m);
+  var lastW = m.weights[m.weights.length - 1];
+  var daysSince = Math.floor((new Date() - new Date(lastW.date)) / 86400000);
+  var eta = calcEta(m);
+  var c = mat.status === 'ready' ? 'var(--sage)' : mat.status === 'almost' ? 'var(--warn)' : mat.status === 'over' ? 'var(--danger)' : 'var(--blue)';
+  var pct = Math.round((tourIdx / tourList.length) * 100);
+  var etaStr = eta && eta.daysLeft > 0 ? eta.eta.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : (eta && eta.daysLeft === 0 ? 'Prêt ✓' : '');
+  var dColor = daysSince >= (weighInterval || 7) ? 'var(--danger)' : daysSince >= Math.floor((weighInterval || 7) * 0.65) ? 'var(--warn)' : 'var(--muted)';
+  var isLast = tourIdx === tourList.length - 1;
+
+  overlay.innerHTML =
+    '<div class="tour-header">' +
+    '<button class="qw-close" onclick="closeTour()">✕</button>' +
+    '<div class="tour-progress-bar"><div class="tour-progress-fill" style="width:' + pct + '%;"></div></div>' +
+    '<span style="font-family:\'Fira Code\',monospace;font-size:.75rem;color:var(--muted);flex-shrink:0;">' + (tourIdx + 1) + '&thinsp;/&thinsp;' + tourList.length + '</span>' +
+    '</div>' +
+
+    '<div class="tour-body">' +
+    '<div class="tour-meat-info">' +
+    '<div class="tour-meat-icon">' + typeIcon(m.type) + '</div>' +
+    '<div class="tour-meat-name">' + m.name + '</div>' +
+    '<div class="tour-meat-type">' + typeLabel(m.type) + '</div>' +
+    '</div>' +
+
+    '<div class="tour-stats">' +
+    '<div class="tour-stat"><div class="tour-stat-v" style="color:' + c + ';">' + mat.loss.toFixed(1) + '%</div><div class="tour-stat-k">Perte&thinsp;/&thinsp;' + mat.tLoss + '%</div></div>' +
+    '<div class="tour-stat"><div class="tour-stat-v">' + lastW.weight + 'g</div><div class="tour-stat-k">Dernier poids</div></div>' +
+    '<div class="tour-stat"><div class="tour-stat-v" style="color:' + dColor + ';">' + (daysSince === 0 ? 'Auj.' : daysSince + 'j') + '</div><div class="tour-stat-k">Depuis pesée</div></div>' +
+    '</div>' +
+
+    (etaStr ? '<div style="text-align:center;"><span class="pill" style="background:var(--glow);color:var(--copper2);border:1px solid var(--border2);font-size:.75rem;">Fin estimée : ' + etaStr + '</span></div>' : '') +
+
+    '<div>' +
+    '<div style="font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:.5rem;">Nouveau poids (g)</div>' +
+    '<input id="tour-w" class="tour-weight-input" type="number" min="1" inputmode="decimal" placeholder="' + lastW.weight + '" onkeydown="if(event.key===\'Enter\')submitTourWeight()">' +
+    '</div>' +
+    '<div class="fg"><label>Date de pesée</label><input id="tour-d" type="date"></div>' +
+    '</div>' + // tour-body
+
+    '<div class="tour-actions">' +
+    (tourIdx > 0 ? '<button class="btn btn-ghost tour-btn-skip" onclick="tourNav(-1)">← Préc.</button>' : '') +
+    '<button id="tour-save-btn" class="btn btn-primary tour-btn-save" onclick="submitTourWeight()">' + (isLast ? 'Peser + Terminer ✓' : 'Peser + Suivant →') + '</button>' +
+    (!isLast ? '<button class="btn btn-ghost tour-btn-skip" onclick="tourNav(1)">Passer →</button>' : '') +
+    '</div>';
+
+  var di = document.getElementById('tour-d');
+  if (di) di.valueAsDate = new Date();
+  setTimeout(function () { var wi = document.getElementById('tour-w'); if (wi) wi.focus(); }, 80);
+}
+
+async function submitTourWeight() {
+  var w = parseFloat((document.getElementById('tour-w') || {}).value);
+  var d = (document.getElementById('tour-d') || {}).value || new Date().toISOString().split('T')[0];
+  if (!w || w <= 0) { tourNav(1); return; }
+  var m = tourList[tourIdx];
+  var btn = document.getElementById('tour-save-btn');
+  if (btn) btn.disabled = true;
+  try {
+    var updated = await apiFetch('/api/meats/' + m.id + '/weights', { method: 'POST', body: { weight: w, date: d } });
+    meats = meats.map(function (x) { return x.id === updated.id ? updated : x; });
+    tourList[tourIdx] = updated;
+    showToast(m.name + ' · pesée enregistrée ✓');
+    if (tourIdx < tourList.length - 1) { tourIdx++; renderTour(); }
+    else { closeTour(); renderList(); showToast('Tournée terminée ✓'); }
+  } catch (e) { showToast('Erreur : ' + e.message, 'error'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+var VIEW_LABELS = { dashboard: 'Tableau de bord', list: 'Mes pièces', archive: 'Archives', add: 'Nouvelle pièce', scan: 'Scanner QR', settings: 'Paramètres', detail: 'Détail', history: 'Historique' };
 
 function showView(name) {
   if (name !== 'scan') stopCamera();
@@ -1274,7 +1918,7 @@ function showView(name) {
   var el = document.getElementById(viewId + '-view');
   if (el) el.classList.add('active');
 
-  var idx = ['list', 'archive', 'add', 'scan', 'history', 'settings'].indexOf(name);
+  var idx = ['dashboard', 'list', 'archive', 'add', 'scan', 'history', 'settings'].indexOf(name);
   if (idx >= 0) {
     var navItems = document.querySelectorAll('.nav-item');
     if (navItems[idx]) navItems[idx].classList.add('active');
@@ -1284,7 +1928,10 @@ function showView(name) {
   if (crumb) crumb.innerHTML = '<span>' + (VIEW_LABELS[name] || '') + '</span>';
   closeSidebar();
 
-  if (name === 'list' || name === 'archive') {
+  if (name === 'dashboard') {
+    refreshDashboard();
+  }
+  else if (name === 'list' || name === 'archive') {
     currentListView = name;
     if (meats.length === 0 && !document.querySelector('.empty')) loadMeats();
     else renderList();
@@ -1425,6 +2072,7 @@ function loadTelegramSettings() {
       if (f) f.value = data.report_frequency || 'off';
       if (i) i.value = (data.interval_days !== undefined) ? data.interval_days : 7;
       if (e) e.checked = !!data.enabled;
+      if (data.interval_days !== undefined) weighInterval = data.interval_days;
     });
 }
 

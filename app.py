@@ -26,6 +26,29 @@ TYPE_ICONS = {
     'autre': '🥩',
 }
 
+TYPE_LABELS = {
+    'coppa':       'Coppa',
+    'lonzo':       'Lonzo',
+    'pancetta':    'Pancetta',
+    'guanciale':   'Guanciale',
+    'bresaola':    'Bresaola',
+    'jambon':      'Jambon',
+    'saucisson':   'Saucisson',
+    'magret':      'Magret de canard',
+    'filet_mignon':'Filet mignon (porc)',
+    'boeuf_seche': 'Bœuf séché',
+    'jerky':       'Beef Jerky',
+    'lomo':        'Lomo embuchado',
+    'pastrami':    'Pastrami',
+    'autre':       'Autre',
+}
+
+TYPE_ORDER = [
+    'coppa', 'lonzo', 'pancetta', 'guanciale', 'bresaola', 'jambon',
+    'saucisson', 'magret', 'filet_mignon', 'boeuf_seche', 'jerky',
+    'lomo', 'pastrami', 'autre',
+]
+
 # --- States for spam prevention ---
 ALERT_STATE = {
     'temperature': 'ok' # ok, too_low, too_high
@@ -111,6 +134,22 @@ def update_config():
         return jsonify({'success': True, 'config': CONFIG})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/types', methods=['GET'])
+def get_types():
+    rows = database.query_db('SELECT type, days, loss FROM type_defaults')
+    db_map = {r['type']: r for r in rows}
+    result = []
+    for t in TYPE_ORDER:
+        d = db_map.get(t, {})
+        result.append({
+            'id':    t,
+            'label': TYPE_LABELS.get(t, t),
+            'icon':  TYPE_ICONS.get(t, '🥩'),
+            'days':  d.get('days', 60),
+            'loss':  d.get('loss', 30),
+        })
+    return jsonify(result)
 
 @app.route('/manifest.json')
 def serve_manifest():
@@ -337,6 +376,42 @@ def update_sensors():
                     ALERT_STATE['temperature'] = new_state
 
     return jsonify({'success': True})
+
+@app.route('/api/homepage', methods=['GET'])
+def get_homepage_data():
+    meats = database.query_db('SELECT * FROM meats WHERE archived = 0 OR archived IS NULL')
+    
+    en_cours = 0
+    pretes = 0
+    
+    for m in meats:
+        weights = database.query_db('SELECT weight FROM weight_entries WHERE meatId = ? ORDER BY date DESC LIMIT 1', (m['id'],))
+        if weights and m.get('initialWeight'):
+            current_w = weights[0]['weight']
+            initial_w = m['initialWeight']
+            
+            if initial_w > 0:
+                current_loss = ((initial_w - current_w) / initial_w) * 100
+                target_loss = m.get('targetLoss', 30)
+                
+                # Using the same threshold logic as the frontend (loss >= 85% of target means ready/almost ready)
+                if current_loss >= target_loss * 0.85:
+                    pretes += 1
+                else:
+                    en_cours += 1
+        else:
+            en_cours += 1  # No weight history, assume it's curing
+
+    sensor = database.query_db('SELECT temperature, humidity FROM sensors WHERE id = 1', one=True)
+    temp = sensor['temperature'] if sensor and sensor['temperature'] is not None else 0
+    hum = sensor['humidity'] if sensor and sensor['humidity'] is not None else 0
+    
+    return jsonify({
+        "en_cours": en_cours,
+        "pretes": pretes,
+        "temperature": temp,
+        "humidity": hum
+    })
 
 @app.route('/api/sensors/history', methods=['GET'])
 def get_sensor_history():

@@ -25,7 +25,10 @@
       <div class="sub">Maturation & Séchage</div>
     </div>
     <nav class="nav">
-      <button class="nav-item active" onclick="showView('list')">
+      <button class="nav-item active" onclick="showView('dashboard')">
+        <span class="nav-dot"></span> Tableau de bord
+      </button>
+      <button class="nav-item" onclick="showView('list')">
         <span class="nav-dot"></span> Mes pièces
       </button>
       <button class="nav-item" onclick="showView('archive')">
@@ -71,8 +74,11 @@
 
     <div class="content">
 
+      <!-- DASHBOARD -->
+      <div id="dashboard-view" class="view active"></div>
+
       <!-- LIST -->
-      <div id="list-view" class="view active">
+      <div id="list-view" class="view">
         <div class="page-head">
           <div class="page-head-left">
             <div class="eyebrow" id="list-title-sub">Cave d'Affinage</div>
@@ -92,6 +98,31 @@
             <span class="badge badge-outline" id="meat-total-weight"
               style="color:var(--ivory2); border-color:var(--border);">0 kg</span>
           </div>
+        </div>
+        <div class="list-controls">
+          <div class="list-controls-left">
+            <select id="list-sort" class="btn btn-ghost btn-sm list-ctrl-sel" onchange="setListSort(this.value)">
+              <option value="status">↕ Statut</option>
+              <option value="date">↑ Date début</option>
+              <option value="progress">↑ Progression</option>
+              <option value="eta">↑ Fin estimée</option>
+              <option value="type">↑ Type</option>
+            </select>
+            <select id="list-filter-type" class="btn btn-ghost btn-sm list-ctrl-sel" onchange="setListFilter('type', this.value)">
+              <option value="">Tous les types</option>
+            </select>
+            <select id="list-filter-status" class="btn btn-ghost btn-sm list-ctrl-sel" onchange="setListFilter('status', this.value)">
+              <option value="">Tous les statuts</option>
+              <option value="curing">En séchage</option>
+              <option value="almost">Bientôt prêt</option>
+              <option value="ready">Prêt</option>
+              <option value="over">Trop sec</option>
+            </select>
+            <button id="list-clear-btn" class="btn btn-ghost btn-sm" onclick="clearListFilters()"
+              style="display:none;color:var(--muted);" title="Réinitialiser">✕</button>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="startTour()" title="Mode tournée de cave"
+            style="white-space:nowrap;">🚶 Tournée</button>
         </div>
         <div id="meat-list"></div>
         <div id="qr-gen-hidden" style="display:none;"></div>
@@ -116,20 +147,7 @@
               <div class="fg">
                 <label>Type</label>
                 <select id="meat-type" onchange="applyTypeDefaults()">
-                  <option value="coppa">Coppa</option>
-                  <option value="lonzo">Lonzo</option>
-                  <option value="pancetta">Pancetta</option>
-                  <option value="guanciale">Guanciale</option>
-                  <option value="bresaola">Bresaola</option>
-                  <option value="jambon">Jambon</option>
-                  <option value="saucisson">Saucisson</option>
-                  <option value="magret">Magret de canard</option>
-                  <option value="filet_mignon">Filet mignon (porc)</option>
-                  <option value="boeuf_seche">Bœuf séché</option>
-                  <option value="jerky">Beef Jerky</option>
-                  <option value="lomo">Lomo embuchado</option>
-                  <option value="pastrami">Pastrami</option>
-                  <option value="autre">Autre</option>
+                  <!-- Populated by loadTypes() from /api/types -->
                 </select>
               </div>
               <div class="fg">
@@ -238,18 +256,12 @@
               <input type="hidden" id="meat-spices" value="">
               <div class="fg-hint" id="spices-pct-hint"></div>
             </div>
-            <div class="form-row">
-              <div class="fg">
-                <label>Prix d'achat (€)</label>
-                <input type="number" id="meat-price" min="0" step="0.01" placeholder="Ex : 15.50">
-              </div>
-              <div class="fg" style="margin-top:1.5rem;">
-                <label class="toggle-fg">
-                  <input type="checkbox" id="meat-smoked">
-                  <span class="toggle-switch"></span>
-                  <span class="toggle-label">Pièce fumée / à fumer 💨</span>
-                </label>
-              </div>
+            <div class="fg" style="margin-top:0.5rem;">
+              <label class="toggle-fg">
+                <input type="checkbox" id="meat-smoked">
+                <span class="toggle-switch"></span>
+                <span class="toggle-label">Pièce fumée / à fumer 💨</span>
+              </label>
             </div>
             <div class="fg">
               <label>Notes</label>
@@ -729,6 +741,40 @@
   </div>
 
   <div id="toast"></div>
+
+  <!-- TOUR OVERLAY -->
+  <div id="tour-overlay" class="tour-overlay"></div>
+
+  <!-- QUICK WEIGH MODAL -->
+  <div class="quick-weigh-overlay" id="quick-weigh-overlay" onclick="if(event.target===this)closeQuickWeigh()">
+    <div class="quick-weigh-modal">
+      <div class="qw-header">
+        <div>
+          <div class="eyebrow" style="margin-bottom:0.3rem;">Pesée rapide</div>
+          <h3 class="qw-title" id="qw-name"></h3>
+        </div>
+        <button class="qw-close" onclick="closeQuickWeigh()">✕</button>
+      </div>
+      <div class="qw-last">
+        <span>Dernier poids :</span>
+        <span class="qw-last-weight" id="qw-last-weight"></span>
+        <span class="qw-last-date" id="qw-last-date"></span>
+      </div>
+      <div class="fg">
+        <label>Nouveau poids (g)</label>
+        <input type="number" id="qw-weight" min="1" placeholder="Ex : 850"
+          onkeydown="if(event.key==='Enter')submitQuickWeight()">
+      </div>
+      <div class="fg" style="margin-top:0.75rem;">
+        <label>Date de pesée</label>
+        <input type="date" id="qw-date">
+      </div>
+      <div class="qw-actions">
+        <button onclick="closeQuickWeigh()" class="btn btn-ghost" style="flex:1;">Annuler</button>
+        <button onclick="submitQuickWeight()" class="btn btn-primary" id="qw-submit-btn" style="flex:1;">Enregistrer →</button>
+      </div>
+    </div>
+  </div>
 </body>
 
 </html>

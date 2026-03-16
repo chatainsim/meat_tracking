@@ -593,6 +593,23 @@ body::after {
   color: var(--muted);
 }
 
+.card-ppkg {
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin: -0.5rem 0 0.75rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(255,255,255,0.025);
+  border-radius: var(--r3);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.card-ppkg strong {
+  color: var(--copper2);
+  font-family: 'Fira Code', monospace;
+}
+.card-ppkg span {
+  color: var(--muted);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -1133,6 +1150,46 @@ body::after {
   font-size: 0.9rem;
   color: var(--copper2);
   margin-bottom: 0.875rem;
+}
+
+.chart-canvas-wrap {
+  position: relative;
+  height: 280px;
+}
+
+.chart-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.875rem;
+}
+
+.chart-info-item {
+  flex: 1;
+  min-width: 120px;
+  padding: 0 1rem 0 0;
+}
+
+.chart-info-item + .chart-info-item {
+  padding-left: 1rem;
+  border-left: 1px solid var(--border);
+}
+
+.chart-info-k {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.chart-info-v {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: var(--ivory2);
+  line-height: 1.3;
 }
 
 /* ═══════════════════════════════ SCAN ═══════════════════════════════ */
@@ -1731,4 +1788,489 @@ body::after {
 .sensor-item.alert::before {
   background: var(--danger) !important;
   box-shadow: 0 0 5px var(--danger) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   LIST CONTROLS (sort / filter / tour)
+   ══════════════════════════════════════════════════════ */
+.list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.list-controls-left {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.list-ctrl-sel {
+  padding: 0.28rem 0.55rem;
+  height: auto;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+/* ══════════════════════════════════════════════════════
+   TOUR MODE
+   ══════════════════════════════════════════════════════ */
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--ink);
+  z-index: 1500;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tour-overlay.open {
+  display: flex;
+}
+
+.tour-header {
+  display: flex;
+  align-items: center;
+  padding: 0.875rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.tour-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--ink3);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.tour-progress-fill {
+  height: 100%;
+  background: var(--copper2);
+  border-radius: 99px;
+  transition: width 0.35s ease;
+}
+
+.tour-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1.25rem;
+  gap: 1.1rem;
+  overflow-y: auto;
+}
+
+.tour-meat-info {
+  text-align: center;
+}
+
+.tour-meat-icon {
+  font-size: 2.75rem;
+  margin-bottom: 0.35rem;
+  line-height: 1;
+}
+
+.tour-meat-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.85rem;
+  font-weight: 600;
+  color: var(--ivory);
+  line-height: 1.2;
+}
+
+.tour-meat-type {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.tour-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.tour-stat {
+  background: var(--ink2);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  padding: 0.7rem 0.5rem;
+  text-align: center;
+}
+
+.tour-stat-v {
+  font-family: 'Fira Code', monospace;
+  font-size: 1.05rem;
+  color: var(--ivory2);
+  line-height: 1;
+}
+
+.tour-stat-k {
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.tour-weight-input {
+  width: 100%;
+  background: var(--ink2);
+  border: 2px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--ivory);
+  font-family: 'Fira Code', monospace;
+  font-size: 2.4rem;
+  text-align: center;
+  padding: 0.875rem 1rem;
+  outline: none;
+  -moz-appearance: textfield;
+  transition: border-color 0.2s;
+}
+
+.tour-weight-input:focus {
+  border-color: var(--copper2);
+  box-shadow: 0 0 0 3px var(--glow);
+}
+
+.tour-weight-input::-webkit-outer-spin-button,
+.tour-weight-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.tour-actions {
+  display: flex;
+  gap: 0.625rem;
+  flex-shrink: 0;
+  padding: 1rem 1.25rem;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--ink);
+}
+
+.tour-btn-save {
+  flex: 2;
+  padding: 0.9rem 1rem;
+  font-size: 0.95rem;
+}
+
+.tour-btn-skip {
+  flex: 1;
+  padding: 0.9rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 480px) {
+  .tour-meat-name { font-size: 1.5rem; }
+  .tour-weight-input { font-size: 2rem; padding: 0.75rem; }
+}
+
+/* ══════════════════════════════════════════════════════
+   DASHBOARD
+   ══════════════════════════════════════════════════════ */
+.db-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.db-kpi {
+  background: var(--ink2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 1.1rem 1rem 0.9rem;
+  transition: border-color 0.2s, transform 0.15s;
+}
+
+.db-kpi-clickable {
+  cursor: pointer;
+}
+
+.db-kpi-clickable:hover {
+  border-color: var(--border2);
+  transform: translateY(-2px);
+}
+
+.db-kpi-n {
+  font-family: 'Fira Code', monospace;
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1;
+  margin-bottom: 0.35rem;
+}
+
+.db-kpi-l {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.db-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.db-empty-s {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0.5rem 0;
+}
+
+.db-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--ivory2);
+  line-height: 1.4;
+  transition: color 0.15s;
+}
+
+.db-alert:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.db-alert[onclick]:hover {
+  color: var(--ivory);
+}
+
+.db-alert-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.db-weigh-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+  border-radius: 4px;
+}
+
+.db-weigh-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.db-weigh-row:hover {
+  background: var(--ink3);
+  margin: 0 -1.5rem;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+.db-weigh-name {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--ivory2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.db-days-badge {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.db-ready-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.75rem;
+}
+
+.db-ready-card {
+  background: var(--ink3);
+  border: 1px solid rgba(90, 138, 106, 0.3);
+  border-radius: var(--r3);
+  padding: 1rem 0.75rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.15s;
+}
+
+.db-ready-card:hover {
+  border-color: var(--sage2);
+  transform: translateY(-2px);
+}
+
+.db-ready-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 0.9rem;
+  color: var(--ivory2);
+  line-height: 1.3;
+  margin-top: 0.1rem;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+@media (max-width: 860px) {
+  .db-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .db-kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   QUICK WEIGH
+   ══════════════════════════════════════════════════════ */
+.card-weigh-btn {
+  background: var(--glow);
+  border: 1px solid var(--copper);
+  color: var(--copper2);
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 1.1rem;
+  font-weight: 700;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.card-weigh-btn:hover {
+  background: var(--copper);
+  color: #fff;
+  border-color: var(--copper2);
+  transform: scale(1.1);
+  box-shadow: 0 0 10px var(--glow);
+}
+
+.quick-weigh-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  z-index: 1200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.quick-weigh-overlay.open {
+  display: flex;
+}
+
+.quick-weigh-modal {
+  background: var(--ink2);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  padding: 1.75rem;
+  width: 100%;
+  max-width: 370px;
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.75), 0 0 0 1px var(--border2);
+  animation: qw-in 0.18s ease;
+}
+
+@keyframes qw-in {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.qw-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  gap: 0.75rem;
+}
+
+.qw-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--ivory);
+  line-height: 1.2;
+  margin: 0;
+}
+
+.qw-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.qw-close:hover {
+  background: var(--ink4);
+  color: var(--ivory);
+  border-color: var(--border2);
+}
+
+.qw-last {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.875rem;
+  background: var(--ink3);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  margin-bottom: 1.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.qw-last-weight {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9rem;
+  color: var(--ivory2);
+  font-weight: 500;
+}
+
+.qw-last-date {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-left: auto;
+}
+
+.qw-actions {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 1.25rem;
 }
