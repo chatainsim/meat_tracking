@@ -106,22 +106,84 @@ function showToast(msg, type) {
 // ══════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════
-// ══════════════════════════════════════════════════════
 // THEME
 // ══════════════════════════════════════════════════════
+var THEMES = {
+  forge:   { label: 'Forge',   mode: 'dark',  desc: 'Charbon & rouille',     bg: '#0c0c0c', accent: '#b85c28' },
+  nuit:    { label: 'Nuit',    mode: 'dark',  desc: 'Bleu nuit & indigo',    bg: '#08090e', accent: '#6366f1' },
+  ardoise: { label: 'Ardoise', mode: 'dark',  desc: 'Forêt & jade',          bg: '#060e09', accent: '#3d9970' },
+  beton:   { label: 'Béton',   mode: 'light', desc: 'Gris béton industriel', bg: '#f0ece6', accent: '#a04c18' },
+  ivoire:  { label: 'Ivoire',  mode: 'light', desc: 'Crème & caramel',       bg: '#fdf8f0', accent: '#8b5e3c' },
+  acier:   { label: 'Acier',   mode: 'light', desc: 'Gris acier & bleu',     bg: '#f4f5f6', accent: '#4b6382' },
+};
+
+function applyTheme(name) {
+  if (!THEMES[name]) name = 'forge';
+  var t = THEMES[name];
+  document.documentElement.setAttribute('data-theme', name);
+  document.documentElement.setAttribute('data-theme-mode', t.mode);
+  try {
+    localStorage.setItem('cave-theme', name);
+    if (t.mode === 'dark')  localStorage.setItem('cave-last-dark', name);
+    else                    localStorage.setItem('cave-last-light', name);
+  } catch (e) { }
+  var cb = document.getElementById('theme-checkbox');
+  if (cb) cb.checked = (t.mode === 'dark');
+  renderThemePickerActive(name);
+}
+
 function toggleTheme(isDark) {
-  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  try { localStorage.setItem('cave-theme', isDark ? 'dark' : 'light'); } catch (e) { }
+  var current = document.documentElement.getAttribute('data-theme') || 'forge';
+  var currentMode = THEMES[current] ? THEMES[current].mode : 'dark';
+  if ((isDark && currentMode === 'dark') || (!isDark && currentMode === 'light')) return;
+  var key = isDark ? 'cave-last-dark' : 'cave-last-light';
+  var fallback = isDark ? 'forge' : 'beton';
+  var saved = null;
+  try { saved = localStorage.getItem(key); } catch (e) { }
+  applyTheme((saved && THEMES[saved] && THEMES[saved].mode === (isDark ? 'dark' : 'light')) ? saved : fallback);
 }
 
 function initTheme() {
   var saved = null;
   try { saved = localStorage.getItem('cave-theme'); } catch (e) { }
-  // Défaut : sombre
-  var isDark = saved ? saved === 'dark' : true;
-  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  var cb = document.getElementById('theme-checkbox');
-  if (cb) cb.checked = isDark;
+  // Migration anciens noms dark/light
+  if (saved === 'dark')  saved = 'forge';
+  if (saved === 'light') saved = 'beton';
+  applyTheme(saved || 'forge');
+}
+
+function renderThemePickerActive(activeName) {
+  document.querySelectorAll('.theme-swatch').forEach(function (el) {
+    el.classList.toggle('active', el.dataset.theme === activeName);
+  });
+}
+
+function renderThemePicker() {
+  var el = document.getElementById('theme-picker-container');
+  if (!el) return;
+  var darkThemes  = ['forge', 'nuit', 'ardoise'];
+  var lightThemes = ['beton', 'ivoire', 'acier'];
+  var current = document.documentElement.getAttribute('data-theme') || 'forge';
+
+  function swatchHTML(name) {
+    var t = THEMES[name];
+    return '<button class="theme-swatch' + (name === current ? ' active' : '') + '" data-theme="' + name + '" onclick="applyTheme(\'' + name + '\')" title="' + t.label + '">' +
+      '<div class="swatch-preview" style="background:' + t.bg + ';">' +
+        '<span class="swatch-dot" style="background:' + t.accent + ';"></span>' +
+        '<span class="swatch-bar" style="background:' + t.accent + ';"></span>' +
+      '</div>' +
+      '<div class="swatch-label">' +
+        '<div class="swatch-name">' + t.label + '</div>' +
+        '<div class="swatch-desc">' + t.desc + '</div>' +
+      '</div>' +
+    '</button>';
+  }
+
+  el.innerHTML =
+    '<div class="theme-group-label">Sombres</div>' +
+    '<div class="theme-picker-grid">' + darkThemes.map(swatchHTML).join('') + '</div>' +
+    '<div class="theme-group-label">Clairs</div>' +
+    '<div class="theme-picker-grid">' + lightThemes.map(swatchHTML).join('') + '</div>';
 }
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -2243,6 +2305,7 @@ function showView(name) {
   }
   else if (name === 'settings') {
     fillIntegrationSnippets();
+    renderThemePicker();
     if (meats.length === 0) loadMeats().then(function () { updateSettingsStats(); loadGitHubSettings(); loadTelegramSettings(); loadAppSettings(); });
     else { updateSettingsStats(); loadGitHubSettings(); loadTelegramSettings(); loadAppSettings(); }
   }
