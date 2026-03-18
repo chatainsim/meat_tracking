@@ -7,7 +7,27 @@ import threading
 import time
 from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify, request, send_from_directory
+from pydantic import ValidationError
 import database
+import schemas
+
+
+def parse_body(Model):
+    """Parse and validate request JSON against a Pydantic model.
+
+    Returns (instance, None) on success, (None, error_response) on failure.
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        return None, (jsonify({'error': 'Corps JSON requis'}), 400)
+    try:
+        return Model.model_validate(data), None
+    except ValidationError as exc:
+        errors = [
+            {'field': '.'.join(str(l) for l in e['loc']), 'msg': e['msg']}
+            for e in exc.errors(include_url=False)
+        ]
+        return None, (jsonify({'error': 'Validation échouée', 'details': errors}), 422)
 
 TYPE_ICONS = {
     'coppa': '🥩',
@@ -151,6 +171,38 @@ def get_types():
         })
     return jsonify(result)
 
+@app.route('/api/recipes', methods=['GET'])
+def get_recipes():
+    rows = database.query_db('SELECT * FROM recipes ORDER BY type, name')
+    return jsonify(rows)
+
+@app.route('/api/recipes', methods=['POST'])
+def create_recipe():
+    body, err = parse_body(schemas.RecipeBody)
+    if err: return err
+    rid = database.execute_db(
+        'INSERT INTO recipes (name, type, salt_pct, sugar_pct, spices, notes) VALUES (?,?,?,?,?,?)',
+        (body.name, body.type, body.salt_pct, body.sugar_pct, body.spices, body.notes)
+    )
+    row = database.query_db('SELECT * FROM recipes WHERE id = ?', (rid,), one=True)
+    return jsonify(row), 201
+
+@app.route('/api/recipes/<int:rid>', methods=['PUT'])
+def update_recipe(rid):
+    body, err = parse_body(schemas.RecipeBody)
+    if err: return err
+    database.execute_db(
+        'UPDATE recipes SET name=?, type=?, salt_pct=?, sugar_pct=?, spices=?, notes=? WHERE id=?',
+        (body.name, body.type, body.salt_pct, body.sugar_pct, body.spices, body.notes, rid)
+    )
+    row = database.query_db('SELECT * FROM recipes WHERE id = ?', (rid,), one=True)
+    return jsonify(row)
+
+@app.route('/api/recipes/<int:rid>', methods=['DELETE'])
+def delete_recipe(rid):
+    database.execute_db('DELETE FROM recipes WHERE id = ?', (rid,))
+    return jsonify({'ok': True})
+
 @app.route('/manifest.json')
 def serve_manifest():
     return send_from_directory(app.static_folder, 'manifest.json', mimetype='application/manifest+json')
@@ -222,36 +274,38 @@ def get_one_meat(meat_id):
 
 @app.route('/api/meats', methods=['POST'])
 def create_meat():
-    data = request.json
-    required = ['id', 'name', 'type', 'initialWeight', 'startDate']
-    if not all(k in data for k in required):
-        return jsonify({'error': 'Missing fields'}), 400
-    
+    body, err = parse_body(schemas.MeatCreate)
+    if err: return err
+
     database.execute_db(
         'INSERT INTO meats (id,name,type,initialWeight,startDate,targetDays,targetLoss,salt,sugar,spices,notes,price,archived,smoked) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        (data['id'], data['name'], data['type'], data['initialWeight'], data['startDate'], data.get('targetDays', 60), data.get('targetLoss', 30),
-         data.get('salt'), data.get('sugar'), data.get('spices'), data.get('notes'), data.get('price'), data.get('archived', 0), data.get('smoked', 0))
+        (body.id, body.name, body.type, body.initialWeight, body.startDate,
+         body.targetDays, body.targetLoss, body.salt, body.sugar,
+         body.spices, body.notes, body.price, body.archived, body.smoked)
     )
-    
-    weights = data.get('weights', [{'weight': data['initialWeight'], 'date': data['startDate']}])
+
+    weights = body.weights or [schemas.WeightBody(weight=body.initialWeight, date=body.startDate)]
     conn = database.get_db()
     for w in weights:
-        conn.execute('INSERT INTO weight_entries (meatId,weight,date) VALUES (?,?,?)', (data['id'], w.get('weight'), w.get('date')))
+        conn.execute('INSERT INTO weight_entries (meatId,weight,date) VALUES (?,?,?)', (body.id, w.weight, w.date))
     conn.commit()
     conn.close()
-    
-    return jsonify(_get_meat_with_weights(data['id'])), 201
+
+    return jsonify(_get_meat_with_weights(body.id)), 201
 
 @app.route('/api/meats/<meat_id>', methods=['PUT'])
 def update_meat(meat_id):
     if not database.query_db('SELECT id FROM meats WHERE id=?', (meat_id,), one=True):
         return jsonify({'error': 'Not found'}), 404
-    
-    data = request.json
+
+    body, err = parse_body(schemas.MeatUpdate)
+    if err: return err
+
     database.execute_db(
         'UPDATE meats SET name=?,type=?,initialWeight=?,startDate=?,targetDays=?,targetLoss=?,salt=?,sugar=?,spices=?,notes=?,price=?,archived=?,smoked=? WHERE id=?',
-        (data.get('name'), data.get('type'), data.get('initialWeight'), data.get('startDate'), data.get('targetDays'), data.get('targetLoss'),
-         data.get('salt'), data.get('sugar'), data.get('spices'), data.get('notes'), data.get('price'), data.get('archived', 0), data.get('smoked', 0), meat_id)
+        (body.name, body.type, body.initialWeight, body.startDate,
+         body.targetDays, body.targetLoss, body.salt, body.sugar,
+         body.spices, body.notes, body.price, body.archived, body.smoked, meat_id)
     )
     return jsonify(_get_meat_with_weights(meat_id))
 
@@ -267,14 +321,16 @@ def delete_meat(meat_id):
 def add_weight(meat_id):
     if not database.query_db('SELECT id FROM meats WHERE id=?', (meat_id,), one=True):
         return jsonify({'error': 'Not found'}), 404
-    data = request.json
-    database.execute_db('INSERT INTO weight_entries (meatId,weight,date) VALUES (?,?,?)', (meat_id, data.get('weight'), data.get('date')))
+    body, err = parse_body(schemas.WeightBody)
+    if err: return err
+    database.execute_db('INSERT INTO weight_entries (meatId,weight,date) VALUES (?,?,?)', (meat_id, body.weight, body.date))
     return jsonify(_get_meat_with_weights(meat_id))
 
 @app.route('/api/meats/<meat_id>/weights/<int:entry_id>', methods=['PUT'])
 def update_weight(meat_id, entry_id):
-    data = request.json
-    database.execute_db('UPDATE weight_entries SET weight=?,date=? WHERE id=? AND meatId=?', (data.get('weight'), data.get('date'), entry_id, meat_id))
+    body, err = parse_body(schemas.WeightBody)
+    if err: return err
+    database.execute_db('UPDATE weight_entries SET weight=?,date=? WHERE id=? AND meatId=?', (body.weight, body.date, entry_id, meat_id))
     return jsonify(_get_meat_with_weights(meat_id))
 
 @app.route('/api/meats/<meat_id>/weights/<int:entry_id>', methods=['DELETE'])
@@ -303,32 +359,32 @@ def get_app_settings():
 
 @app.route('/api/settings', methods=['PUT'])
 def update_app_settings():
-    data = request.json
-    if not data: return jsonify({'error': 'No data'}), 400
+    body, err = parse_body(schemas.AppSettings)
+    if err: return err
     database.execute_db(
         'UPDATE app_settings SET producer_name=? WHERE id=1',
-        (data.get('producer_name'),)
+        (body.producer_name,)
     )
     return jsonify({'success': True})
 
 @app.route('/api/sensors/settings', methods=['PUT'])
 def update_sensor_settings():
-    data = request.json
-    if not data: return jsonify({'error': 'No data'}), 400
+    body, err = parse_body(schemas.SensorSettings)
+    if err: return err
     database.execute_db(
         'UPDATE sensor_settings SET temp_min=?, temp_max=?, hum_min=?, hum_max=?, alerts_enabled=? WHERE id=1',
-        (data.get('temp_min'), data.get('temp_max'), data.get('hum_min'), data.get('hum_max'), data.get('alerts_enabled', 0))
+        (body.temp_min, body.temp_max, body.hum_min, body.hum_max, body.alerts_enabled)
     )
     return jsonify({'success': True})
 
 @app.route('/api/sensors', methods=['POST'])
 def update_sensors():
-    data = request.json
-    if not data: return jsonify({'error': 'No data'}), 400
-    
+    body, err = parse_body(schemas.SensorUpdate)
+    if err: return err
+
     now_iso = datetime.now(timezone.utc).isoformat()
-    temp = data.get('temperature')
-    hum = data.get('humidity')
+    temp = body.temperature
+    hum = body.humidity
 
     # Update current status
     database.execute_db(
@@ -429,75 +485,118 @@ def get_github_settings():
 
 @app.route('/api/github/settings', methods=['PUT'])
 def update_github_settings():
-    data = request.json
-    if not data: return jsonify({'error': 'No data'}), 400
+    body, err = parse_body(schemas.GitHubSettings)
+    if err: return err
     database.execute_db(
-        'UPDATE github_settings SET token=?, repo=?, path=?, enabled=? WHERE id=1',
-        (data.get('token'), data.get('repo'), data.get('path', 'backup.json'), data.get('enabled', 0))
+        'UPDATE github_settings SET token=?, repo=?, path=?, enabled=?, auto_backup_enabled=?, auto_backup_hour=? WHERE id=1',
+        (body.token, body.repo, body.path, body.enabled, body.auto_backup_enabled, body.auto_backup_hour)
     )
     return jsonify({'success': True})
 
-@app.route('/api/github/backup', methods=['POST'])
-def github_backup():
+
+def _do_github_backup():
+    """Run the GitHub backup. Returns (success: bool, error_msg: str|None).
+    On success, updates last_backup_at in DB."""
     settings = database.query_db('SELECT * FROM github_settings WHERE id = 1', one=True)
     if not settings or not settings.get('token') or not settings.get('repo'):
-        return jsonify({'error': 'GitHub integration not configured'}), 400
-    
-    # 1. Collect all data
+        return False, 'GitHub integration not configured'
+
     meats = database.query_db('SELECT * FROM meats ORDER BY createdAt DESC')
     for m in meats:
         m['weights'] = database.query_db('SELECT id, weight, date FROM weight_entries WHERE meatId = ? ORDER BY date ASC', (m['id'],))
-    
+
     sensor_settings = database.query_db('SELECT * FROM sensor_settings WHERE id = 1', one=True)
-    
+
     backup_data = {
         'version': '2.1',
         'exportDate': datetime.now(timezone.utc).isoformat(),
         'meats': meats,
-        'sensor_settings': sensor_settings
+        'sensor_settings': sensor_settings,
     }
-    
+
     content = json.dumps(backup_data, indent=2, ensure_ascii=False).encode('utf-8')
     content_b64 = base64.b64encode(content).decode('ascii')
-    
+
     token = settings['token']
-    repo = settings['repo']
-    path = settings.get('path', 'backup.json')
+    repo  = settings['repo']
+    path  = settings.get('path', 'backup.json')
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    
-    # 2. Check if file exists to get SHA
+
+    # Get existing SHA (required for updates)
     sha = None
     try:
         req = urllib.request.Request(api_url)
         req.add_header('Authorization', f'token {token}')
         req.add_header('Accept', 'application/vnd.github.v3+json')
         with urllib.request.urlopen(req) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            sha = res_data.get('sha')
+            sha = json.loads(response.read().decode('utf-8')).get('sha')
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            return jsonify({'error': f"GitHub API Error check: {e.reason}"}), 500
-            
-    # 3. PUT backup
+            return False, f'GitHub API check error: {e.reason}'
+
     put_data = {
-        'message': f"Backup from Cave d'Affinage - {datetime.now(timezone.utc).isoformat()}",
-        'content': content_b64
+        'message': f"Auto-backup Cave d'Affinage — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        'content': content_b64,
     }
     if sha:
         put_data['sha'] = sha
-        
+
     try:
         req = urllib.request.Request(api_url, data=json.dumps(put_data).encode('utf-8'), method='PUT')
         req.add_header('Authorization', f'token {token}')
         req.add_header('Accept', 'application/vnd.github.v3+json')
         req.add_header('Content-Type', 'application/json')
         with urllib.request.urlopen(req) as response:
-            return jsonify({'success': True, 'github': json.loads(response.read().decode('utf-8'))})
+            response.read()
     except urllib.error.HTTPError as e:
-        error_msg = e.read().decode('utf-8')
-        return jsonify({'error': f"GitHub API Error upload: {e.reason} - {error_msg}"}), 500
+        return False, f'GitHub API upload error: {e.reason} — {e.read().decode("utf-8", errors="replace")}'
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return False, str(e)
+
+    database.execute_db(
+        'UPDATE github_settings SET last_backup_at=? WHERE id=1',
+        (datetime.now(timezone.utc).isoformat(),)
+    )
+    return True, None
+
+
+@app.route('/api/github/backup', methods=['POST'])
+def github_backup():
+    success, err = _do_github_backup()
+    if success:
+        settings = database.query_db('SELECT last_backup_at FROM github_settings WHERE id=1', one=True)
+        return jsonify({'success': True, 'last_backup_at': settings['last_backup_at'] if settings else None})
+    return jsonify({'error': err}), 500
+
+
+def _github_backup_worker():
+    """Background thread: runs _do_github_backup() once per day at the configured hour."""
+    print('☁ GitHub auto-backup worker démarré', flush=True)
+    while True:
+        try:
+            settings = database.query_db('SELECT * FROM github_settings WHERE id = 1', one=True)
+            if settings and settings.get('auto_backup_enabled') and settings.get('token') and settings.get('repo'):
+                target_hour = int(settings.get('auto_backup_hour', 2))
+                now = datetime.now()
+                if now.hour == target_hour:
+                    # Check not already done today
+                    last = settings.get('last_backup_at')
+                    already_done = False
+                    if last:
+                        try:
+                            already_done = datetime.fromisoformat(last).date() == now.date()
+                        except Exception:
+                            pass
+                    if not already_done:
+                        print(f'⏰ Sauvegarde GitHub automatique ({target_hour:02d}h)…', flush=True)
+                        success, err = _do_github_backup()
+                        if success:
+                            print('✅ Sauvegarde GitHub automatique réussie.', flush=True)
+                        else:
+                            print(f'❌ Échec sauvegarde GitHub automatique : {err}', flush=True)
+        except Exception as e:
+            print(f'❌ Erreur github backup worker : {e}', flush=True)
+        time.sleep(60)  # Check every minute — only fires once per day at the right hour
 
 # --- Telegram Notifications ---
 def send_telegram_message(token, chat_id, text):
@@ -519,11 +618,11 @@ def get_telegram_settings():
 
 @app.route('/api/telegram/settings', methods=['PUT'])
 def update_telegram_settings():
-    data = request.json
-    if not data: return jsonify({'error': 'No data'}), 400
+    body, err = parse_body(schemas.TelegramSettings)
+    if err: return err
     database.execute_db(
         'UPDATE telegram_settings SET token=?, chat_id=?, interval_days=?, enabled=?, report_frequency=? WHERE id=1',
-        (data.get('token'), data.get('chat_id'), data.get('interval_days', 7), data.get('enabled', 0), data.get('report_frequency', 'off'))
+        (body.token, body.chat_id, body.interval_days, body.enabled, body.report_frequency or 'off')
     )
     return jsonify({'success': True})
 
@@ -740,8 +839,9 @@ def notification_worker():
             print(f"❌ Erreur worker : {e}", flush=True)
             time.sleep(60)
 
-# Start background thread
+# Start background threads
 threading.Thread(target=notification_worker, daemon=True).start()
+threading.Thread(target=_github_backup_worker, daemon=True).start()
 
 @app.route('/api/health')
 def health():

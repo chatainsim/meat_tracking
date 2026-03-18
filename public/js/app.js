@@ -14,6 +14,7 @@ var listFilterType = '';
 var listFilterStatus = '';
 var tourList = [];
 var tourIdx = 0;
+var recipes = [];
 
 // Populated from /api/types — single source of truth
 var TYPES = {};      // { id: { id, label, icon, days, loss } }
@@ -57,7 +58,14 @@ async function apiFetch(url, opts) {
     method: opts.method || 'GET',
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
-  if (!res.ok) { var e = await res.json().catch(function () { return {}; }); throw new Error(e.error || 'HTTP ' + res.status); }
+  if (!res.ok) {
+    var e = await res.json().catch(function () { return {}; });
+    var msg = e.error || 'HTTP ' + res.status;
+    if (e.details && e.details.length) {
+      msg += ' — ' + e.details.map(function (d) { return (d.field ? d.field + ' : ' : '') + d.msg; }).join(' | ');
+    }
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -119,6 +127,7 @@ function initTheme() {
 document.addEventListener('DOMContentLoaded', function () {
   initTheme();
   loadTypes().then(loadMeats);
+  loadRecipes();
   loadAppSettings();
   loadNetworkSettings();
   loadTelegramSettings();
@@ -127,7 +136,7 @@ document.addEventListener('DOMContentLoaded', function () {
   loadSensorSettings();
   setInterval(refreshSensors, 60000);
   document.getElementById('scan-input').addEventListener('keypress', function (e) { if (e.key === 'Enter') scanManual(); });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeQuickWeigh(); closeTour(); } });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeQuickWeigh(); closeTour(); closeSaveRecipeModal(); } });
   // Live SSV hints on weight/seasoning input
   var wInput = document.getElementById('meat-weight');
   if (wInput) wInput.addEventListener('input', updateSeasoningHints);
@@ -265,6 +274,7 @@ function applyTypeDefaults() {
   document.getElementById('meat-target-days').value = d.days;
   document.getElementById('meat-target-loss').value = d.loss;
   updateSeasoningHints();
+  populateRecipeSelector();
 }
 
 function updateSeasoningHints() {
@@ -1781,6 +1791,296 @@ function buildDashboardAlerts(active) {
 }
 
 // ══════════════════════════════════════════════════════
+// RECIPES
+// ══════════════════════════════════════════════════════
+async function loadRecipes() {
+  try {
+    recipes = await apiFetch('/api/recipes');
+    populateRecipeSelector();
+  } catch (e) { console.error('loadRecipes:', e); }
+}
+
+function populateRecipeSelector() {
+  var sel = document.getElementById('recipe-selector');
+  if (!sel) return;
+  var typeEl = document.getElementById('meat-type');
+  var currentType = typeEl ? typeEl.value : '';
+  var filtered = recipes.filter(function (r) { return !r.type || r.type === currentType; });
+  sel.innerHTML = '<option value="">— Appliquer une recette —</option>' +
+    filtered.map(function (r) {
+      return '<option value="' + r.id + '">' + (r.type ? typeIcon(r.type) + ' ' : '') + r.name + '</option>';
+    }).join('');
+  // Populate sr-type in save modal if open
+  var srType = document.getElementById('sr-type');
+  if (srType && srType.options.length <= 1) {
+    srType.innerHTML = '<option value="">Toutes viandes</option>' + buildTypeOptions('');
+  }
+}
+
+function applyRecipe(rid) {
+  if (!rid) return;
+  var r = recipes.find(function (x) { return String(x.id) === String(rid); });
+  if (!r) return;
+  var wEl = document.getElementById('meat-weight');
+  var w = wEl ? parseFloat(wEl.value) : 0;
+  if (w > 0) {
+    var saltEl = document.getElementById('meat-salt');
+    var sugarEl = document.getElementById('meat-sugar');
+    if (saltEl && r.salt_pct != null) {
+      saltEl.value = (r.salt_pct / 100 * w).toFixed(1);
+      saltEl.dataset.autoVal = '';
+    }
+    if (sugarEl && r.sugar_pct != null) {
+      sugarEl.value = (r.sugar_pct / 100 * w).toFixed(1);
+      sugarEl.dataset.autoVal = '';
+    }
+  }
+  if (r.spices) {
+    var hiddenSpices = document.getElementById('meat-spices');
+    if (hiddenSpices) {
+      hiddenSpices.value = r.spices;
+      renderSpices('spices-container', 'meat-spices');
+    }
+  }
+  if (r.notes) {
+    var notesEl = document.getElementById('meat-notes');
+    if (notesEl && !notesEl.value) notesEl.value = r.notes;
+  }
+  updateSeasoningHints();
+  var sel = document.getElementById('recipe-selector');
+  if (sel) sel.value = '';
+  showToast('Recette "' + r.name + '" appliquée');
+}
+
+function saveCurrentAsRecipe() {
+  var wEl = document.getElementById('meat-weight');
+  var w = wEl ? parseFloat(wEl.value) : 0;
+  var saltEl  = document.getElementById('meat-salt');
+  var sugarEl = document.getElementById('meat-sugar');
+  var spicesEl = document.getElementById('meat-spices');
+  var typeEl  = document.getElementById('meat-type');
+
+  var saltPct  = (saltEl  && saltEl.value  && w > 0) ? parseFloat(saltEl.value)  / w * 100 : null;
+  var sugarPct = (sugarEl && sugarEl.value && w > 0) ? parseFloat(sugarEl.value) / w * 100 : null;
+  var spices   = spicesEl ? spicesEl.value : '';
+  var type     = typeEl ? typeEl.value : '';
+
+  var overlay = document.getElementById('save-recipe-overlay');
+  if (!overlay) return;
+  // Populate sr-type options
+  var srType = document.getElementById('sr-type');
+  if (srType) srType.innerHTML = '<option value="">Toutes viandes</option>' + buildTypeOptions(type);
+  document.getElementById('sr-name').value = '';
+  document.getElementById('sr-salt-pct').value  = saltPct  != null ? saltPct.toFixed(2)  : '';
+  document.getElementById('sr-sugar-pct').value = sugarPct != null ? sugarPct.toFixed(2) : '';
+  document.getElementById('sr-spices').value = spices;
+  overlay.classList.add('open');
+  setTimeout(function () { var n = document.getElementById('sr-name'); if (n) n.focus(); }, 80);
+}
+
+function closeSaveRecipeModal() {
+  var overlay = document.getElementById('save-recipe-overlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+async function submitSaveRecipe() {
+  var name = (document.getElementById('sr-name').value || '').trim();
+  if (!name) { showToast('Nom requis', 'error'); return; }
+  var saltVal  = document.getElementById('sr-salt-pct').value;
+  var sugarVal = document.getElementById('sr-sugar-pct').value;
+  var body = {
+    name:      name,
+    type:      document.getElementById('sr-type').value || null,
+    salt_pct:  saltVal  ? parseFloat(saltVal)  : null,
+    sugar_pct: sugarVal ? parseFloat(sugarVal) : null,
+    spices:    document.getElementById('sr-spices').value.trim() || null,
+    notes:     null,
+  };
+  try {
+    await apiFetch('/api/recipes', { method: 'POST', body: body });
+    await loadRecipes();
+    closeSaveRecipeModal();
+    showToast('Recette "' + name + '" sauvegardée ✓');
+  } catch (e) { showToast('Erreur : ' + e.message, 'error'); }
+}
+
+function renderRecipes() {
+  var el = document.getElementById('recipes-view');
+  if (!el) return;
+
+  var byType = {};
+  var untyped = [];
+  recipes.forEach(function (r) {
+    if (r.type) { if (!byType[r.type]) byType[r.type] = []; byType[r.type].push(r); }
+    else untyped.push(r);
+  });
+
+  var groups = '';
+  TYPE_ORDER.forEach(function (t) {
+    if (!byType[t]) return;
+    groups += '<div class="recipe-group">' +
+      '<div class="recipe-group-title">' + typeIcon(t) + ' ' + typeLabel(t) + '</div>' +
+      '<div class="recipe-grid">' + byType[t].map(buildRecipeCard).join('') + '</div></div>';
+  });
+  if (untyped.length) {
+    groups += '<div class="recipe-group">' +
+      '<div class="recipe-group-title">🥩 Toutes viandes</div>' +
+      '<div class="recipe-grid">' + untyped.map(buildRecipeCard).join('') + '</div></div>';
+  }
+
+  el.innerHTML =
+    '<div class="page-head">' +
+    '<div class="page-head-left"><div class="eyebrow">Assaisonnements</div><h2>Recettes</h2></div>' +
+    '<div style="display:flex;gap:.5rem;">' +
+    '<button class="btn btn-ghost btn-sm" onclick="importRecipes()" title="Importer un fichier JSON">⬆ Importer</button>' +
+    '<button class="btn btn-primary btn-sm" onclick="openNewRecipeForm()">+ Nouvelle</button>' +
+    '</div></div>' +
+    (recipes.length === 0
+      ? '<div class="empty-state"><div class="empty-icon">📋</div><div>Aucune recette enregistrée.</div>' +
+        '<div style="margin-top:.5rem;font-size:.8rem;color:var(--muted);">Créez vos mélanges via "Nouvelle" ou depuis le formulaire "Nouvelle pièce".</div></div>'
+      : groups) +
+    '<div id="recipe-form-panel" class="recipe-form-panel" style="display:none;"></div>';
+}
+
+function buildRecipeCard(r) {
+  var spicesList = r.spices ? r.spices.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+  var spicesPreview = spicesList.length
+    ? spicesList.slice(0, 4).map(function (s) { return '<span class="spice-tag">' + s + '</span>'; }).join('') +
+      (spicesList.length > 4 ? '<span class="spice-tag" style="color:var(--muted);">+' + (spicesList.length - 4) + '</span>' : '')
+    : '<span style="color:var(--muted);font-size:.7rem;">—</span>';
+
+  return '<div class="recipe-card" id="rc-' + r.id + '">' +
+    '<div class="recipe-card-type">' + (r.type ? typeIcon(r.type) + ' ' + typeLabel(r.type) : '<span style="color:var(--muted);">Toutes viandes</span>') + '</div>' +
+    '<div class="recipe-card-name">' + r.name + '</div>' +
+    '<div class="recipe-ratios">' +
+    (r.salt_pct  != null ? '<div class="recipe-ratio"><div class="ratio-k">Sel</div><div class="ratio-v">' + r.salt_pct.toFixed(1)  + '%</div></div>' : '') +
+    (r.sugar_pct != null ? '<div class="recipe-ratio"><div class="ratio-k">Sucre</div><div class="ratio-v">' + r.sugar_pct.toFixed(1) + '%</div></div>' : '') +
+    '</div>' +
+    '<div class="recipe-spices">' + spicesPreview + '</div>' +
+    (r.notes ? '<div class="recipe-notes">' + r.notes + '</div>' : '') +
+    '<div class="recipe-actions">' +
+    '<button class="btn btn-ghost btn-sm" onclick="editRecipe(' + r.id + ')">✎ Modifier</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="exportRecipe(' + r.id + ')" title="Exporter JSON">↓</button>' +
+    '<button class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="deleteRecipe(' + r.id + ')">✕</button>' +
+    '</div>' +
+    '</div>';
+}
+
+function openNewRecipeForm() {
+  showRecipeForm(null);
+}
+
+function editRecipe(rid) {
+  var r = recipes.find(function (x) { return x.id === rid; });
+  if (r) showRecipeForm(r);
+}
+
+function showRecipeForm(r) {
+  var panel = document.getElementById('recipe-form-panel');
+  if (!panel) return;
+  var isNew = !r;
+  panel.style.display = 'block';
+  panel.innerHTML =
+    '<div class="dcard-title">' + (isNew ? 'Nouvelle recette' : 'Modifier · ' + r.name) + '</div>' +
+    '<div class="fg"><label>Nom</label><input type="text" id="rf-name" value="' + (r ? r.name : '') + '" placeholder="Ex : Coppa traditionnelle"></div>' +
+    '<div class="fg"><label>Type de viande (optionnel)</label><select id="rf-type"><option value="">Toutes viandes</option>' + buildTypeOptions(r ? (r.type || '') : '') + '</select></div>' +
+    '<div class="form-row">' +
+    '<div class="fg"><label>Sel (%)</label><input type="number" id="rf-salt" value="' + (r && r.salt_pct != null ? r.salt_pct : '') + '" step="0.1" min="0" placeholder="4.5"></div>' +
+    '<div class="fg"><label>Sucre (%)</label><input type="number" id="rf-sugar" value="' + (r && r.sugar_pct != null ? r.sugar_pct : '') + '" step="0.1" min="0" placeholder="2.0"></div>' +
+    '</div>' +
+    '<div class="fg"><label>Épices (séparées par virgule)</label><input type="text" id="rf-spices" value="' + (r && r.spices ? r.spices : '') + '" placeholder="Poivre noir, Ail, Thym..."></div>' +
+    '<div class="fg"><label>Notes</label><textarea id="rf-notes" rows="2" placeholder="Méthode, variantes, durée de saumurage...">' + (r && r.notes ? r.notes : '') + '</textarea></div>' +
+    '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
+    '<button class="btn btn-primary" onclick="submitRecipeForm(' + (r ? r.id : 'null') + ')">' + (isNew ? 'Créer la recette' : 'Enregistrer') + '</button>' +
+    '<button class="btn btn-ghost" onclick="closeRecipeForm()">Annuler</button>' +
+    '</div>';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  setTimeout(function () { var n = document.getElementById('rf-name'); if (n) n.focus(); }, 80);
+}
+
+function closeRecipeForm() {
+  var panel = document.getElementById('recipe-form-panel');
+  if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+}
+
+async function submitRecipeForm(rid) {
+  var name = (document.getElementById('rf-name').value || '').trim();
+  if (!name) { showToast('Nom requis', 'error'); return; }
+  var saltVal  = document.getElementById('rf-salt').value;
+  var sugarVal = document.getElementById('rf-sugar').value;
+  var body = {
+    name:      name,
+    type:      document.getElementById('rf-type').value || null,
+    salt_pct:  saltVal  ? parseFloat(saltVal)  : null,
+    sugar_pct: sugarVal ? parseFloat(sugarVal) : null,
+    spices:    document.getElementById('rf-spices').value.trim() || null,
+    notes:     document.getElementById('rf-notes').value.trim() || null,
+  };
+  try {
+    if (rid) {
+      await apiFetch('/api/recipes/' + rid, { method: 'PUT', body: body });
+    } else {
+      await apiFetch('/api/recipes', { method: 'POST', body: body });
+    }
+    await loadRecipes();
+    renderRecipes();
+    showToast((rid ? 'Recette modifiée' : 'Recette créée') + ' ✓');
+  } catch (e) { showToast('Erreur : ' + e.message, 'error'); }
+}
+
+async function deleteRecipe(rid) {
+  if (!confirm('Supprimer cette recette ?')) return;
+  try {
+    await apiFetch('/api/recipes/' + rid, { method: 'DELETE' });
+    await loadRecipes();
+    renderRecipes();
+    showToast('Recette supprimée');
+  } catch (e) { showToast('Erreur : ' + e.message, 'error'); }
+}
+
+function exportRecipe(rid) {
+  var r = recipes.find(function (x) { return x.id === rid; });
+  if (!r) return;
+  var blob = new Blob([JSON.stringify({ recipe: r }, null, 2)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'recette-' + r.name.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importRecipes() {
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    try {
+      var text = await file.text();
+      var data = JSON.parse(text);
+      var list = Array.isArray(data) ? data : (data.recipes ? data.recipes : (data.recipe ? [data.recipe] : []));
+      if (!list.length) { showToast('Aucune recette trouvée dans le fichier', 'error'); return; }
+      var count = 0;
+      for (var r of list) {
+        if (!r.name) continue;
+        await apiFetch('/api/recipes', { method: 'POST', body: {
+          name: r.name, type: r.type || null,
+          salt_pct: r.salt_pct || null, sugar_pct: r.sugar_pct || null,
+          spices: r.spices || null, notes: r.notes || null,
+        }});
+        count++;
+      }
+      await loadRecipes();
+      renderRecipes();
+      showToast(count + ' recette(s) importée(s) ✓');
+    } catch (e) { showToast('Erreur import : ' + e.message, 'error'); }
+  };
+  input.click();
+}
+
+// ══════════════════════════════════════════════════════
 // SORT & FILTER
 // ══════════════════════════════════════════════════════
 function setListSort(val) {
@@ -1907,7 +2207,7 @@ async function submitTourWeight() {
   finally { if (btn) btn.disabled = false; }
 }
 
-var VIEW_LABELS = { dashboard: 'Tableau de bord', list: 'Mes pièces', archive: 'Archives', add: 'Nouvelle pièce', scan: 'Scanner QR', settings: 'Paramètres', detail: 'Détail', history: 'Historique' };
+var VIEW_LABELS = { dashboard: 'Tableau de bord', list: 'Mes pièces', archive: 'Archives', add: 'Nouvelle pièce', scan: 'Scanner QR', history: 'Historique', recipes: 'Recettes', settings: 'Paramètres', detail: 'Détail' };
 
 function showView(name) {
   if (name !== 'scan') stopCamera();
@@ -1918,7 +2218,7 @@ function showView(name) {
   var el = document.getElementById(viewId + '-view');
   if (el) el.classList.add('active');
 
-  var idx = ['dashboard', 'list', 'archive', 'add', 'scan', 'history', 'settings'].indexOf(name);
+  var idx = ['dashboard', 'list', 'archive', 'add', 'scan', 'history', 'recipes', 'settings'].indexOf(name);
   if (idx >= 0) {
     var navItems = document.querySelectorAll('.nav-item');
     if (navItems[idx]) navItems[idx].classList.add('active');
@@ -1942,11 +2242,15 @@ function showView(name) {
     if (pBtn) pBtn.style.display = displayMeats.length > 0 ? 'inline-flex' : 'none';
   }
   else if (name === 'settings') {
+    fillIntegrationSnippets();
     if (meats.length === 0) loadMeats().then(function () { updateSettingsStats(); loadGitHubSettings(); loadTelegramSettings(); loadAppSettings(); });
     else { updateSettingsStats(); loadGitHubSettings(); loadTelegramSettings(); loadAppSettings(); }
   }
   else if (name === 'history') {
     refreshEnvChart();
+  }
+  else if (name === 'recipes') {
+    renderRecipes();
   }
 }
 
@@ -1958,6 +2262,111 @@ function openSidebar() {
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').style.display = 'none';
+}
+
+// ══════════════════════════════════════════════════════
+// INTEGRATION SNIPPETS (Homepage / Home Assistant)
+// ══════════════════════════════════════════════════════
+function fillIntegrationSnippets() {
+  var origin = window.location.origin; // e.g. http://192.168.1.10:3000
+
+  var snippets = {
+    'snippet-hp-api': [
+      '# services.yaml (Homepage)',
+      '- Cave d\'Affinage:',
+      '    - Maturation:',
+      '        icon: mdi-food-steak',
+      '        href: ' + origin,
+      '        description: Suivi de séchage & affinage',
+      '        widget:',
+      '          type: customapi',
+      '          url: ' + origin + '/api/homepage',
+      '          mappings:',
+      '            - field: en_cours',
+      '              label: En cours',
+      '              format: number',
+      '            - field: pretes',
+      '              label: Prêtes',
+      '              format: number',
+      '            - field: temperature',
+      '              label: Température',
+      '              format: float',
+      '              suffix: "°C"',
+      '            - field: humidity',
+      '              label: Humidité',
+      '              format: float',
+      '              suffix: "%"',
+    ].join('\n'),
+
+    'snippet-hp-iframe': [
+      '# services.yaml (Homepage)',
+      '- Cave d\'Affinage:',
+      '    - Maturation:',
+      '        description: Cave d\'affinage',
+      '        widget:',
+      '          type: iframe',
+      '          src: ' + origin,
+      '          classes: h-96',
+      '          referrerPolicy: same-origin',
+      '          allowPolicy: autoplay; fullscreen',
+    ].join('\n'),
+
+    'snippet-ha-rest': [
+      '# configuration.yaml (Home Assistant)',
+      'rest_command:',
+      '  update_cave_sensors:',
+      '    url: "' + origin + '/api/sensors"',
+      '    method: post',
+      '    verify_ssl: false',
+      '    content_type: "application/json"',
+      '    payload: \'{"temperature": {{ states("sensor.votre_temp") }},',
+      '               "humidity": {{ states("sensor.votre_hum") }}}\'',
+    ].join('\n'),
+
+    'snippet-ha-auto': [
+      '# automations.yaml (Home Assistant)',
+      '- alias: "Envoi capteurs → Cave d\'Affinage"',
+      '  trigger:',
+      '    - platform: time_pattern',
+      '      minutes: "/15"',
+      '  condition: []',
+      '  action:',
+      '    - service: rest_command.update_cave_sensors',
+    ].join('\n'),
+  };
+
+  Object.keys(snippets).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = snippets[id];
+  });
+}
+
+function copySnippet(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function () {
+    showToast('Snippet copié ✓');
+  }).catch(function () {
+    // Fallback for non-HTTPS contexts
+    var ta = document.createElement('textarea');
+    ta.value = el.textContent;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('Snippet copié ✓');
+  });
+}
+
+function switchTab(group, tab, btn) {
+  // Hide all tabs in group
+  document.querySelectorAll('[id^="' + group + '-tab-"]').forEach(function (el) { el.style.display = 'none'; });
+  document.querySelectorAll('#' + group + '-tabs .itab').forEach(function (b) { b.classList.remove('active'); });
+  // Show selected
+  var target = document.getElementById(group + '-tab-' + tab);
+  if (target) target.style.display = '';
+  if (btn) btn.classList.add('active');
 }
 
 // ══════════════════════════════════════════════════════
@@ -2030,19 +2439,52 @@ function loadGitHubSettings() {
     .then(function (res) { return res.json(); })
     .then(function (data) {
       if (!data || data.id === undefined) return;
-      var t = document.getElementById('gh-token'), r = document.getElementById('gh-repo'), p = document.getElementById('gh-path');
+      var t = document.getElementById('gh-token');
+      var r = document.getElementById('gh-repo');
+      var p = document.getElementById('gh-path');
+      var autoEl = document.getElementById('gh-auto-enabled');
+      var hourEl = document.getElementById('gh-auto-hour');
       if (t) t.value = data.token || '';
       if (r) r.value = data.repo || '';
       if (p) p.value = data.path || 'backup.json';
+      var autoOn = !!data.auto_backup_enabled;
+      if (autoEl) autoEl.checked = autoOn;
+      if (hourEl) hourEl.value = data.auto_backup_hour != null ? data.auto_backup_hour : 2;
+      toggleGhAutoHour(autoOn);
+      _renderGhLastBackup(data.last_backup_at);
     });
 }
 
+function toggleGhAutoHour(on) {
+  var row = document.getElementById('gh-auto-hour-row');
+  if (row) row.style.display = on ? '' : 'none';
+}
+
+function _renderGhLastBackup(isoStr) {
+  var el = document.getElementById('gh-last-backup');
+  var dateEl = document.getElementById('gh-last-backup-date');
+  if (!el || !dateEl) return;
+  if (!isoStr) { el.style.display = 'none'; return; }
+  try {
+    var d = new Date(isoStr);
+    dateEl.textContent = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) +
+      ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    el.style.display = '';
+  } catch (e) { el.style.display = 'none'; }
+}
+
 async function saveGitHubSettings() {
+  var tokenVal = document.getElementById('gh-token').value.trim();
+  var repoVal  = document.getElementById('gh-repo').value.trim();
+  var autoEl   = document.getElementById('gh-auto-enabled');
+  var hourEl   = document.getElementById('gh-auto-hour');
   var body = {
-    token: document.getElementById('gh-token').value.trim(),
-    repo: document.getElementById('gh-repo').value.trim(),
-    path: document.getElementById('gh-path').value.trim() || 'backup.json',
-    enabled: 1
+    token: tokenVal,
+    repo:  repoVal,
+    path:  document.getElementById('gh-path').value.trim() || 'backup.json',
+    enabled: (tokenVal && repoVal) ? 1 : 0,
+    auto_backup_enabled: (autoEl && autoEl.checked) ? 1 : 0,
+    auto_backup_hour: hourEl ? parseInt(hourEl.value) : 2,
   };
   if (!body.token || !body.repo) { showToast('Token et dépôt requis', 'error'); return; }
   try {
@@ -2052,11 +2494,15 @@ async function saveGitHubSettings() {
 }
 
 async function backupToGitHub() {
-  showToast('Sauvegarde GitHub en cours...', 'info');
+  showToast('Sauvegarde GitHub en cours…', 'info');
   try {
     var res = await apiFetch('/api/github/backup', { method: 'POST' });
-    if (res.success) showToast('Sauvegarde GitHub réussie ✓');
-    else showToast('Erreur GitHub : ' + (res.error || 'inconnue'), 'error');
+    if (res.success) {
+      _renderGhLastBackup(res.last_backup_at);
+      showToast('Sauvegarde GitHub réussie ✓');
+    } else {
+      showToast('Erreur GitHub : ' + (res.error || 'inconnue'), 'error');
+    }
   } catch (e) { showToast('Erreur : ' + e.message, 'error'); }
 }
 

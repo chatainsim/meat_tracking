@@ -43,6 +43,9 @@
       <button class="nav-item" onclick="showView('history')">
         <span class="nav-dot"></span> Historique
       </button>
+      <button class="nav-item" onclick="showView('recipes')">
+        <span class="nav-dot"></span> Recettes
+      </button>
       <button class="nav-item" onclick="showView('settings')">
         <span class="nav-dot"></span> Paramètres
       </button>
@@ -177,7 +180,13 @@
               </div>
             </div>
             <div class="fg-hint" style="margin-bottom:1.5rem;">Valeurs pré-remplies selon le type, ajustables.</div>
-            <div class="form-divider">Assaisonnement SSV 421</div>
+            <div class="form-divider">Assaisonnement</div>
+            <div class="recipe-selector-bar">
+              <select id="recipe-selector" class="btn btn-ghost btn-sm list-ctrl-sel" onchange="applyRecipe(this.value)" style="flex:1;min-width:0;">
+                <option value="">— Appliquer une recette —</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="saveCurrentAsRecipe()" title="Sauvegarder l'assaisonnement comme recette">↗ Sauvegarder</button>
+            </div>
             <div class="form-row">
               <div class="fg">
                 <label>Sel (g)</label>
@@ -305,6 +314,9 @@
       <!-- DETAIL -->
       <div id="detail-view" class="view"></div>
 
+      <!-- RECIPES -->
+      <div id="recipes-view" class="view"></div>
+
       <!-- SETTINGS -->
       <div id="settings-view" class="view">
         <div class="page-head">
@@ -410,8 +422,39 @@
               <label>Chemin (ex: backup.json)</label>
               <input type="text" id="gh-path" value="backup.json">
             </div>
-            <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
-              <button onclick="saveGitHubSettings()" class="btn btn-ghost btn-sm" style="flex:1;">Configurer</button>
+            <div style="height:1px;background:var(--border);margin:.875rem 0;"></div>
+            <label class="toggle-fg">
+              <input type="checkbox" id="gh-auto-enabled" onchange="toggleGhAutoHour(this.checked)">
+              <span class="toggle-switch"></span>
+              <span class="toggle-label">Sauvegarde automatique quotidienne</span>
+            </label>
+            <div id="gh-auto-hour-row" class="form-row" style="display:none;margin-top:.75rem;">
+              <div class="fg">
+                <label>Heure de sauvegarde</label>
+                <select id="gh-auto-hour">
+                  <option value="0">00:00</option><option value="1">01:00</option>
+                  <option value="2" selected>02:00</option><option value="3">03:00</option>
+                  <option value="4">04:00</option><option value="5">05:00</option>
+                  <option value="6">06:00</option><option value="7">07:00</option>
+                  <option value="8">08:00</option><option value="9">09:00</option>
+                  <option value="10">10:00</option><option value="11">11:00</option>
+                  <option value="12">12:00</option><option value="13">13:00</option>
+                  <option value="14">14:00</option><option value="15">15:00</option>
+                  <option value="16">16:00</option><option value="17">17:00</option>
+                  <option value="18">18:00</option><option value="19">19:00</option>
+                  <option value="20">20:00</option><option value="21">21:00</option>
+                  <option value="22">22:00</option><option value="23">23:00</option>
+                </select>
+              </div>
+              <div class="fg" style="display:flex;align-items:flex-end;">
+                <div class="fg-hint" style="margin:0;">Le serveur doit être en cours d'exécution à cette heure.</div>
+              </div>
+            </div>
+            <div id="gh-last-backup" style="display:none;margin-top:.625rem;padding:.4rem .75rem;background:var(--ink3);border:1px solid var(--border);border-radius:var(--r3);font-size:.72rem;color:var(--muted);">
+              ✅ Dernière sauvegarde : <span id="gh-last-backup-date" style="color:var(--ivory2);font-family:'Fira Code',monospace;"></span>
+            </div>
+            <div style="display:flex; gap:0.5rem; margin-top:.875rem;">
+              <button onclick="saveGitHubSettings()" class="btn btn-ghost btn-sm" style="flex:1;">Enregistrer</button>
               <button onclick="backupToGitHub()" class="btn btn-primary btn-sm" style="flex:1;">🚀 Sauvegarder</button>
             </div>
           </div>
@@ -477,6 +520,50 @@
             <div
               style="margin-top:.625rem;padding:.5rem .75rem;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:var(--r3);font-size:.7rem;color:#f59e0b;">
               ⚠ Un redémarrage du serveur est requis pour appliquer le changement de port.
+            </div>
+          </div>
+          <div class="sc">
+            <h3>🏠 Homepage</h3>
+            <p class="sc-desc">Intégrez Cave d'Affinage dans votre tableau de bord <a href="https://gethomepage.dev" target="_blank" rel="noopener" style="color:var(--copper2);">Homepage</a>.</p>
+            <div class="integration-tabs" id="hp-tabs">
+              <button class="itab active" onclick="switchTab('hp','api',this)">Widget API</button>
+              <button class="itab" onclick="switchTab('hp','iframe',this)">iFrame</button>
+            </div>
+            <div id="hp-tab-api">
+              <p class="sc-desc" style="margin-top:.5rem;">Ajoute 4 métriques live (pièces actives, prêtes, temp., humidité) via <code style="font-size:.75rem;color:var(--copper2);">/api/homepage</code>.</p>
+              <div class="integration-block">
+                <button class="copy-btn" onclick="copySnippet('snippet-hp-api')" title="Copier">⎘</button>
+                <pre class="integration-pre"><code id="snippet-hp-api"></code></pre>
+              </div>
+            </div>
+            <div id="hp-tab-iframe" style="display:none;">
+              <p class="sc-desc" style="margin-top:.5rem;">Intègre l'application complète en iframe dans Homepage.</p>
+              <div class="integration-block">
+                <button class="copy-btn" onclick="copySnippet('snippet-hp-iframe')" title="Copier">⎘</button>
+                <pre class="integration-pre"><code id="snippet-hp-iframe"></code></pre>
+              </div>
+            </div>
+          </div>
+          <div class="sc">
+            <h3>🤖 Home Assistant</h3>
+            <p class="sc-desc">Envoyez les relevés de vos capteurs HA vers la cave pour afficher temp. et humidité en temps réel.</p>
+            <div class="integration-tabs" id="ha-tabs">
+              <button class="itab active" onclick="switchTab('ha','rest',this)">REST Command</button>
+              <button class="itab" onclick="switchTab('ha','auto',this)">Automation</button>
+            </div>
+            <div id="ha-tab-rest">
+              <p class="sc-desc" style="margin-top:.5rem;">Ajoutez dans <code style="font-size:.75rem;color:var(--copper2);">configuration.yaml</code> :</p>
+              <div class="integration-block">
+                <button class="copy-btn" onclick="copySnippet('snippet-ha-rest')" title="Copier">⎘</button>
+                <pre class="integration-pre"><code id="snippet-ha-rest"></code></pre>
+              </div>
+            </div>
+            <div id="ha-tab-auto" style="display:none;">
+              <p class="sc-desc" style="margin-top:.5rem;">Ajoutez dans <code style="font-size:.75rem;color:var(--copper2);">automations.yaml</code> — déclenche toutes les 15 min :</p>
+              <div class="integration-block">
+                <button class="copy-btn" onclick="copySnippet('snippet-ha-auto')" title="Copier">⎘</button>
+                <pre class="integration-pre"><code id="snippet-ha-auto"></code></pre>
+              </div>
             </div>
           </div>
           <div class="sc danger-card">
@@ -744,6 +831,46 @@
 
   <!-- TOUR OVERLAY -->
   <div id="tour-overlay" class="tour-overlay"></div>
+
+  <!-- SAVE AS RECIPE MODAL -->
+  <div class="quick-weigh-overlay" id="save-recipe-overlay" onclick="if(event.target===this)closeSaveRecipeModal()">
+    <div class="quick-weigh-modal">
+      <div class="qw-header">
+        <div>
+          <div class="eyebrow" style="margin-bottom:0.3rem;">Assaisonnement</div>
+          <h3 class="qw-title">Sauvegarder comme recette</h3>
+        </div>
+        <button class="qw-close" onclick="closeSaveRecipeModal()">✕</button>
+      </div>
+      <div class="fg">
+        <label>Nom de la recette</label>
+        <input type="text" id="sr-name" placeholder="Ex : Coppa maison classique"
+          onkeydown="if(event.key==='Enter')submitSaveRecipe()">
+      </div>
+      <div class="fg" style="margin-top:0.75rem;">
+        <label>Type de viande (optionnel)</label>
+        <select id="sr-type"><option value="">Toutes viandes</option></select>
+      </div>
+      <div class="form-row" style="margin-top:0.75rem;">
+        <div class="fg">
+          <label>Sel (%)</label>
+          <input type="number" id="sr-salt-pct" step="0.1" min="0" placeholder="4.5">
+        </div>
+        <div class="fg">
+          <label>Sucre (%)</label>
+          <input type="number" id="sr-sugar-pct" step="0.1" min="0" placeholder="2.0">
+        </div>
+      </div>
+      <div class="fg" style="margin-top:0.75rem;">
+        <label>Épices (liste actuelle)</label>
+        <input type="text" id="sr-spices" placeholder="Poivre, Ail...">
+      </div>
+      <div class="qw-actions">
+        <button onclick="closeSaveRecipeModal()" class="btn btn-ghost" style="flex:1;">Annuler</button>
+        <button onclick="submitSaveRecipe()" class="btn btn-primary" style="flex:1;">Sauvegarder ✓</button>
+      </div>
+    </div>
+  </div>
 
   <!-- QUICK WEIGH MODAL -->
   <div class="quick-weigh-overlay" id="quick-weigh-overlay" onclick="if(event.target===this)closeQuickWeigh()">

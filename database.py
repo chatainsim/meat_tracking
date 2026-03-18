@@ -108,6 +108,20 @@ def init():
     
     conn.commit()
     
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS recipes (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            name      TEXT    NOT NULL,
+            type      TEXT,
+            salt_pct  REAL,
+            sugar_pct REAL,
+            spices    TEXT,
+            notes     TEXT,
+            createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+    conn.commit()
+
     # migration
     cursor = conn.execute("PRAGMA table_info(meats)")
     cols = [row['name'] for row in cursor.fetchall()]
@@ -120,7 +134,17 @@ def init():
     if 'archived' not in cols: conn.execute('ALTER TABLE meats ADD COLUMN archived INTEGER DEFAULT 0')
     if 'smoked' not in cols: conn.execute('ALTER TABLE meats ADD COLUMN smoked INTEGER DEFAULT 0')
     if 'lastNotificationDate' not in cols: conn.execute('ALTER TABLE meats ADD COLUMN lastNotificationDate TEXT')
-    
+
+    # Migration: auto-backup columns on github_settings
+    cursor = conn.execute("PRAGMA table_info(github_settings)")
+    gh_cols = [row['name'] for row in cursor.fetchall()]
+    if 'auto_backup_enabled' not in gh_cols:
+        conn.execute('ALTER TABLE github_settings ADD COLUMN auto_backup_enabled INTEGER DEFAULT 0')
+    if 'auto_backup_hour' not in gh_cols:
+        conn.execute('ALTER TABLE github_settings ADD COLUMN auto_backup_hour INTEGER DEFAULT 2')
+    if 'last_backup_at' not in gh_cols:
+        conn.execute('ALTER TABLE github_settings ADD COLUMN last_backup_at TEXT')
+
     conn.commit()
     conn.close()
 

@@ -2274,3 +2274,226 @@ body::after {
   gap: 0.625rem;
   margin-top: 1.25rem;
 }
+
+/* ══════════════════════════════════════════════════════
+   RECIPES
+   ══════════════════════════════════════════════════════ */
+.recipe-selector-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1.25rem;
+}
+
+.recipe-group {
+  margin-bottom: 2rem;
+}
+
+.recipe-group-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--copper2);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.recipe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.875rem;
+}
+
+.recipe-card {
+  background: var(--ink3);
+  border: 1px solid var(--border);
+  border-radius: var(--r4);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color 0.18s;
+}
+
+.recipe-card:hover {
+  border-color: var(--border3);
+}
+
+.recipe-card-type {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.recipe-card-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ivory);
+  line-height: 1.2;
+}
+
+.recipe-ratios {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.recipe-ratio {
+  background: var(--glow);
+  border: 1px solid var(--copper);
+  border-radius: var(--r3);
+  padding: 0.3rem 0.625rem;
+  min-width: 60px;
+  text-align: center;
+}
+
+.ratio-k {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 0.1rem;
+}
+
+.ratio-v {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.85rem;
+  color: var(--copper2);
+  font-weight: 500;
+}
+
+.recipe-spices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  min-height: 1.2rem;
+}
+
+.spice-tag {
+  font-size: 0.68rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 0.15rem 0.5rem;
+  color: var(--ivory2);
+  white-space: nowrap;
+}
+
+.recipe-notes {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
+  line-height: 1.4;
+  border-top: 1px solid var(--border);
+  padding-top: 0.4rem;
+  margin-top: 0.1rem;
+}
+
+.recipe-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.recipe-form-panel {
+  background: var(--ink3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r4);
+  padding: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 600px) {
+  .recipe-grid {
+    grid-template-columns: 1fr;
+  }
+  .recipe-selector-bar {
+    flex-wrap: wrap;
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   INTEGRATION SNIPPETS
+   ══════════════════════════════════════════════════════ */
+.integration-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.itab {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r3);
+  color: var(--muted);
+  font-family: 'Syne', sans-serif;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.65rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.itab:hover {
+  color: var(--ivory2);
+  border-color: var(--border);
+}
+
+.itab.active {
+  color: var(--copper2);
+  background: var(--glow);
+  border-color: var(--copper);
+}
+
+.integration-block {
+  position: relative;
+}
+
+.integration-pre {
+  background: var(--ink4);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  padding: 0.875rem 1rem;
+  padding-right: 2.5rem;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.integration-pre code {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.68rem;
+  color: var(--ivory2);
+  line-height: 1.65;
+  white-space: pre;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--ink3);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  color: var(--muted);
+  font-size: 0.85rem;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.copy-btn:hover {
+  color: var(--ivory);
+  border-color: var(--border3);
+  background: var(--ink4);
+}
